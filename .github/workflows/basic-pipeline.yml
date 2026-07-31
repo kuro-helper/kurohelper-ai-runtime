@@ -1,0 +1,25 @@
+name: Basic Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - feature/*
+      - enhancement/*
+      - bugfix/*
+      - hotfix/*
+      - release/*
+      - test/*
+      - refactor/*
+      - ci/*
+      - style/*
+      - docs/*
+      - chore/*
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  event-send:
+    uses: kuro-helper/.github/.github/workflows/event-send.yml@main
+    secrets: inherit
