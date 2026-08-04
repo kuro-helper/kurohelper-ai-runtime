@@ -8,14 +8,14 @@
     "Senjin the Dragon <https://github.com/senjinthedragon>"
   ],
   "license": "MIT",
-  "homepage": "https://github.com/tommy-125/kurohelper-ai-runtime",
+  "homepage": "https://github.com/kuro-helper/kurohelper-ai-runtime",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tommy-125/kurohelper-ai-runtime.git",
+    "url": "git+https://github.com/kuro-helper/kurohelper-ai-runtime.git",
     "directory": "server"
   },
   "bugs": {
-    "url": "https://github.com/tommy-125/kurohelper-ai-runtime/issues"
+    "url": "https://github.com/kuro-helper/kurohelper-ai-runtime/issues"
   },
   "main": "server.js",
   "scripts": {

@@ -47,12 +47,12 @@
   "license": "SEE LICENSE IN LICENSES.md",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tommy-125/kurohelper-ai-runtime.git"
+    "url": "git+https://github.com/kuro-helper/kurohelper-ai-runtime.git"
   },
   "bugs": {
-    "url": "https://github.com/tommy-125/kurohelper-ai-runtime/issues"
+    "url": "https://github.com/kuro-helper/kurohelper-ai-runtime/issues"
   },
-  "homepage": "https://github.com/tommy-125/kurohelper-ai-runtime#readme",
+  "homepage": "https://github.com/kuro-helper/kurohelper-ai-runtime#readme",
   "devDependencies": {
     "version-everything": "^0.11.4"
   }
