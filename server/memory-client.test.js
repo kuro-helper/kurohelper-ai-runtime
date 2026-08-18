@@ -224,6 +224,33 @@ test("memory management uses the shared character scope", async () => {
   assert.equal(requests[9].body.backup_id, "20260730T120000Z-manual-abcdef12");
 });
 
+test("manageRequest validates and routes memory actions", async () => {
+  const requests = [];
+  const client = createMemoryClient({
+    enabled: true,
+    fetchImpl: async (url, options) => {
+      requests.push({ url, body: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({ status: "ok" }) };
+    },
+  });
+
+  await client.manageRequest({
+    action: "list",
+    status: "invalid",
+    limit: 500,
+    offset: -1,
+  });
+  assert.equal(requests[0].url.endsWith("/v1/manage/list"), true);
+  assert.equal(requests[0].body.status, "active");
+  assert.equal(requests[0].body.limit, 50);
+  assert.equal(requests[0].body.offset, 0);
+
+  await assert.rejects(
+    client.manageRequest({ action: "unknown" }),
+    (error) => error.code === "invalid_action",
+  );
+});
+
 function turn(channelId, requestId) {
   return {
     requestId,

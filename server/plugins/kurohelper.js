@@ -3,17 +3,6 @@
 "use strict";
 
 const WebSocket = require("ws");
-const {
-  listMemories,
-  getMemory,
-  forgetMemory,
-  restoreMemory,
-  resolveMemory,
-  clearMemories,
-  listBackups,
-  createBackup,
-  restoreBackup,
-} = require("../memory-client");
 
 const PROTOCOL_VERSION = 1;
 const configuredRequestCacheTtl = Number.parseInt(
@@ -197,52 +186,10 @@ function createKuroHelperPlugin(handlers, pluginConfig = {}) {
   }
 
   async function handleMemory(socket, message) {
-    const request = message.payload || {};
-    let result;
-    switch (request.action) {
-      case "list":
-        result = await listMemories({
-          status: ["active", "pending", "deleted"].includes(request.status)
-            ? request.status
-            : "active",
-          limit: Math.max(1, Math.min(Number(request.limit) || 20, 50)),
-          offset: Math.max(0, Math.min(Number(request.offset) || 0, 1_000_000)),
-        });
-        break;
-      case "get":
-        result = await getMemory(String(request.memoryId || ""));
-        break;
-      case "forget":
-        result = await forgetMemory(String(request.memoryId || ""));
-        break;
-      case "restore":
-        result = await restoreMemory(String(request.memoryId || ""));
-        break;
-      case "resolve":
-        result = await resolveMemory(
-          String(request.memoryId || ""),
-          String(request.resolution || ""),
-        );
-        break;
-      case "clear":
-        result = await clearMemories();
-        break;
-      case "backup_list":
-        result = await listBackups({
-          limit: Math.max(1, Math.min(Number(request.limit) || 20, 50)),
-          offset: Math.max(0, Math.min(Number(request.offset) || 0, 1_000_000)),
-        });
-        break;
-      case "backup_create":
-        result = await createBackup();
-        break;
-      case "backup_restore":
-        result = await restoreBackup(String(request.backupId || ""));
-        break;
-      default:
-        fail(socket, message.requestId, "invalid_action", "Unknown memory action.");
-        return;
+    if (typeof handlers.manageMemory !== "function") {
+      throw new Error("Memory management is unavailable.");
     }
+    const result = await handlers.manageMemory(message.payload || {});
     send(socket, "memory_response", message.requestId, result);
   }
 
@@ -281,7 +228,12 @@ function createKuroHelperPlugin(handlers, pluginConfig = {}) {
       try {
         await handleMemory(socket, message);
       } catch (error) {
-        fail(socket, message.requestId, "memory_unavailable", error.message);
+        fail(
+          socket,
+          message.requestId,
+          error.code === "invalid_action" ? "invalid_action" : "memory_unavailable",
+          error.message,
+        );
       }
       return;
     }
@@ -373,7 +325,6 @@ function createKuroHelperPlugin(handlers, pluginConfig = {}) {
           contextParticipants: Array.isArray(payload.contextParticipants)
             ? payload.contextParticipants.slice(0, 25)
             : [],
-          recentChannelContext: String(payload.recentChannelContext || ""),
           recentMessages,
           replyTo,
           retrievalText: String(payload.retrievalText || ""),

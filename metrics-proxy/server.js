@@ -3,6 +3,7 @@
 const http = require("node:http");
 const https = require("node:https");
 const { randomUUID } = require("node:crypto");
+const { applyGenerationPolicy } = require("./generation-policy");
 
 const PORT = positiveInt(process.env.METRICS_PROXY_PORT, 8081);
 const UPSTREAM_BASE_URL = String(
@@ -101,21 +102,10 @@ function applyGenerationOverrides(payload, options = {}) {
   const forceReasoningEffort = options.forceReasoningEffort
     ?? FORCE_REASONING_EFFORT;
   const providerSort = options.providerSort ?? PROVIDER_SORT;
-  payload.usage = { ...(payload.usage || {}), include: true };
-  if (providerSort) {
-    payload.provider = { ...(payload.provider || {}), sort: providerSort };
-  }
-  if (forceReasoningEffort) {
-    // SillyTavern's custom OpenAI-compatible source does not reliably forward
-    // its reasoning UI setting. Set the OpenRouter-native field here so the
-    // provider cannot silently fall back to the model's default effort.
-    payload.reasoning = forceReasoningEffort === "none"
-      ? { enabled: false, exclude: true }
-      : { effort: forceReasoningEffort };
-    delete payload.reasoning_effort;
-    delete payload.include_reasoning;
-  }
-  return payload;
+  return applyGenerationPolicy(payload, {
+    forceReasoningEffort,
+    providerSort,
+  });
 }
 
 function parseSseEvents(state, chunk, onPayload) {

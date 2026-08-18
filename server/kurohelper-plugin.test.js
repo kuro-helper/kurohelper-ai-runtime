@@ -238,6 +238,52 @@ test("KuroHelper transport sends background memory metrics", async () => {
   }
 });
 
+test("KuroHelper transport delegates memory management to the application handler", async () => {
+  const port = await reservePort();
+  let receivedRequest;
+  const plugin = createKuroHelperPlugin(
+    {
+      isSillyTavernReady: () => true,
+      manageMemory: async (request) => {
+        receivedRequest = request;
+        return { status: "ok", count: 1 };
+      },
+      onUserMessage: async () => false,
+      log: () => {},
+    },
+    { host: "127.0.0.1", port, secret: "test-secret" },
+  );
+  await plugin.start();
+
+  try {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}`, {
+      headers: { Authorization: "Bearer test-secret" },
+    });
+    await new Promise((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+    const responsePromise = waitForMessage(socket);
+    socket.send(JSON.stringify({
+      version: 1,
+      type: "memory_request",
+      requestId: "memory-1",
+      payload: { action: "list", status: "active", limit: 10 },
+    }));
+    const response = await responsePromise;
+    assert.deepEqual(receivedRequest, {
+      action: "list",
+      status: "active",
+      limit: 10,
+    });
+    assert.equal(response.type, "memory_response");
+    assert.equal(response.payload.count, 1);
+    socket.close();
+  } finally {
+    await plugin.stop();
+  }
+});
+
 test("KuroHelper transport returns the raw reply cache", async () => {
   const port = await reservePort();
   const entries = [{

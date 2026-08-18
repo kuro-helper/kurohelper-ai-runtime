@@ -2,6 +2,7 @@ FROM node:22-alpine
 
 WORKDIR /app
 COPY metrics-proxy/server.js ./server.js
+COPY metrics-proxy/generation-policy.js ./generation-policy.js
 
 ENV NODE_ENV=production
 EXPOSE 8081

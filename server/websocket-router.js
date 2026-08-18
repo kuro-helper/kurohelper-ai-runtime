@@ -13,6 +13,10 @@
 
 const { t } = require("./i18n");
 const { sanitizeModelOutput } = require("./output-sanitizer");
+const {
+  handleAIReply,
+  handleTerminalMessage,
+} = require("./conversation-completion");
 
 async function handleBridgePacket(data, deps) {
   const {
@@ -206,98 +210,18 @@ async function handleBridgePacket(data, deps) {
         break;
       }
 
-      const providerMetrics =
-        typeof claimProviderMetrics === "function"
-          ? await claimProviderMetrics(data.receivedAt)
-          : { generationCount: 0, usageAvailable: false };
-      const metrics = { ...(data.metrics || {}), ...providerMetrics };
-      const messages =
-        data?.messages || (data?.text ? [{ name: "", text: data.text }] : []);
-      const deliverable = messages
-        .map((msg) => ({
-          name: msg?.name || "",
-          text: sanitizeModelOutput(msg?.text),
-        }))
-        .filter((msg) => msg.text);
-
-      if (deliverable.length === 0) {
-        await fanout(
-          conversationId,
-          "sendText",
-          "模型沒有產生可用的回覆，請再試一次。",
-          {
-            kind: "error",
-            requestId: data.requestId || "",
-            final: true,
-            metrics,
-          },
-        );
-        break;
-      }
-      const delivered = [];
-      for (let index = 0; index < deliverable.length; index += 1) {
-        const msg = deliverable[index];
-        const cleanText = msg.text;
-        delivered.push(cleanText);
-        // Discord already displays the bot/character name. Returning only the
-        // generated text also prevents repeated bold "Kuro" headings.
-        const text = cleanText;
-        await fanout(conversationId, "sendText", text, {
-          kind: "ai_reply",
-          requestId: data.requestId || "",
-          final: index === deliverable.length - 1,
-          metrics,
-        });
-      }
-      if (
-        delivered.length > 0 &&
-        typeof rememberTurn === "function" &&
-        data.userId &&
-        data.userText
-      ) {
-        Promise.resolve(
-          rememberTurn({
-            requestId: data.requestId || "",
-            userId: data.userId,
-            channelId: conversationId,
-            displayName: data.displayName || "",
-            mentionedUsers: data.mentionedUsers || [],
-            contextParticipants: data.contextParticipants || [],
-            recentMessages: data.recentMessages || [],
-            userText: data.userText,
-            assistantText: delivered.join("\n\n"),
-          }),
-        )
-          .then((result) => {
-            if (!result?.metrics) return null;
-            const sourceRequestId = String(data.requestId || "");
-            return fanout(conversationId, "sendMetric", {
-              requestId: `${sourceRequestId}:memory`,
-              sourceRequestId,
-              operation: "memory_extraction",
-              metrics: result.metrics,
-            });
-          })
-          .catch((error) =>
-            log("warn", `[Memory] Could not submit turn: ${error.message}`),
-          );
-      }
+      await handleAIReply(data, {
+        fanout,
+        rememberTurn,
+        claimProviderMetrics,
+        log,
+      });
       break;
     }
 
     case "error_message":
     case "intro_message": {
-      const providerMetrics =
-        typeof claimProviderMetrics === "function"
-          ? await claimProviderMetrics(data.receivedAt)
-          : { generationCount: 0, usageAvailable: false };
-      if (data?.text?.trim())
-        await fanout(conversationId, "sendText", data.text.trim(), {
-          kind: "error",
-          requestId: data.requestId || "",
-          final: true,
-          metrics: { ...(data.metrics || {}), ...providerMetrics },
-        });
+      await handleTerminalMessage(data, { fanout, claimProviderMetrics });
       break;
     }
 

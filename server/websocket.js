@@ -14,7 +14,11 @@
 const WebSocket = require('ws');
 const { log } = require('./logger');
 const { config, wssPort } = require('./config-loader');
-const { rememberTurn, recallMemories } = require('./memory-client');
+const {
+  rememberTurn,
+  recallMemories,
+  manageMemory,
+} = require('./memory-client');
 const { claimProviderMetrics } = require('./metrics-client');
 const {
   describeImages,
@@ -375,9 +379,6 @@ const pluginLoader = createPluginLoader({
       displayName: metadata.displayName || '',
       mentionedUsers: metadata.mentionedUsers || [],
       contextParticipants: metadata.contextParticipants || [],
-      recentChannelContext: recentMessages
-        ? ''
-        : metadata.recentChannelContext || '',
       replyTo: metadata.replyTo || null,
       visionContext: visionObservations ? '' : vision.context || '',
       visionObservations: visionObservations || [],
@@ -437,6 +438,7 @@ const pluginLoader = createPluginLoader({
     dispatchCommand(platform, chatId, command, args, userId);
   },
   isSillyTavernReady: () => workerPool.hasWorkers(),
+  manageMemory,
   listRawReplies,
   getVisionCacheStats,
   log,

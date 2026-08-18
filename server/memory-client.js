@@ -302,6 +302,46 @@ function createMemoryClient(options = {}) {
     );
   }
 
+  async function manageRequest(request = {}) {
+    switch (request.action) {
+      case "list":
+        return listMemories({
+          status: ["active", "pending", "deleted"].includes(request.status)
+            ? request.status
+            : "active",
+          limit: Math.max(1, Math.min(Number(request.limit) || 20, 50)),
+          offset: Math.max(0, Math.min(Number(request.offset) || 0, 1_000_000)),
+        });
+      case "get":
+        return getMemory(String(request.memoryId || ""));
+      case "forget":
+        return forgetMemory(String(request.memoryId || ""));
+      case "restore":
+        return restoreMemory(String(request.memoryId || ""));
+      case "resolve":
+        return resolveMemory(
+          String(request.memoryId || ""),
+          String(request.resolution || ""),
+        );
+      case "clear":
+        return clearMemories();
+      case "backup_list":
+        return listBackups({
+          limit: Math.max(1, Math.min(Number(request.limit) || 20, 50)),
+          offset: Math.max(0, Math.min(Number(request.offset) || 0, 1_000_000)),
+        });
+      case "backup_create":
+        return createBackup();
+      case "backup_restore":
+        return restoreBackup(String(request.backupId || ""));
+      default: {
+        const error = new Error("Unknown memory action.");
+        error.code = "invalid_action";
+        throw error;
+      }
+    }
+  }
+
   return {
     recall,
     rememberTurn,
@@ -314,6 +354,7 @@ function createMemoryClient(options = {}) {
     listBackups,
     createBackup,
     restoreBackup,
+    manageRequest,
     enabled,
     characterId,
   };
@@ -334,4 +375,5 @@ module.exports = {
   listBackups: defaultClient.listBackups,
   createBackup: defaultClient.createBackup,
   restoreBackup: defaultClient.restoreBackup,
+  manageMemory: defaultClient.manageRequest,
 };
