@@ -24,17 +24,17 @@ function structuredContent(
   });
 }
 
-test("vision client sends Discord images to Gemini and returns guarded context", async () => {
+test("vision client sends Discord images to GPT-5.6 Luna and returns guarded context", async () => {
   let request;
   const client = createVisionClient({
     enabled: true,
     apiKey: "test-key",
-    baseUrl: "https://openrouter.example/api/v1",
+    baseUrl: "https://gateway.example/v1",
     fetch: async (url, options) => {
       request = { url, options, body: JSON.parse(options.body) };
       return new Response(JSON.stringify({
         id: "vision-generation-1",
-        model: "google/gemini-2.5-flash-lite",
+        model: "gpt-5.6-luna",
         usage: {
           prompt_tokens: 120,
           completion_tokens: 30,
@@ -49,15 +49,16 @@ test("vision client sends Discord images to Gemini and returns guarded context",
     url: "https://cdn.discordapp.com/attachments/1/2/cat.png",
   }], "這是什麼？");
 
-  assert.equal(request.url, "https://openrouter.example/api/v1/chat/completions");
-  assert.equal(request.body.model, "google/gemini-2.5-flash-lite");
+  assert.equal(request.url, "https://gateway.example/v1/chat/completions");
+  assert.equal(request.body.model, "gpt-5.6-luna");
   assert.equal(request.body.messages[0].content[1].type, "image_url");
   assert.equal(request.body.response_format.type, "json_schema");
   assert.equal(request.body.response_format.json_schema.strict, true);
-  assert.equal(request.body.provider.require_parameters, true);
-  assert.deepEqual(request.body.provider.only, ["google-ai-studio"]);
-  assert.equal(request.body.provider.allow_fallbacks, false);
-  assert.equal(request.body.usage.include, true);
+  assert.equal(request.body.reasoning_effort, "xhigh");
+  assert.equal(request.body.max_tokens, undefined);
+  assert.equal(request.body.provider, undefined);
+  assert.equal(request.body.usage, undefined);
+  assert.equal(request.options.headers["X-Kuro-Upstream"], undefined);
   assert.deepEqual(
     Object.keys(request.body.response_format.json_schema.schema.properties),
     ["ocr", "observation"],
@@ -72,6 +73,7 @@ test("vision client sends Discord images to Gemini and returns guarded context",
   assert.equal(result.metrics.completionTokens, 30);
   assert.equal(result.metrics.totalTokens, 150);
   assert.equal(result.metrics.costUsd, 0.00012);
+  assert.equal(result.metrics.provider, "Unicode Gateway");
   assert.equal(result.metricRecords.length, 1);
 });
 
@@ -80,6 +82,7 @@ test("vision client rotates from AI Studio Standard to Flex after a mid-response
   const client = createVisionClient({
     enabled: true,
     apiKey: "test-key",
+    providerRoutes: DEFAULT_PROVIDER_ROUTES,
     fetch: async (_url, options) => {
       const body = JSON.parse(options.body);
       const route = body.provider.only[0];
@@ -156,6 +159,7 @@ test("vision client reports rate limiting only after every configured route fail
   const client = createVisionClient({
     enabled: true,
     apiKey: "test-key",
+    providerRoutes: DEFAULT_PROVIDER_ROUTES,
     fetch: async (_url, options) => {
       const body = JSON.parse(options.body);
       attemptedRoutes.push(body.provider.only[0]);
@@ -179,16 +183,17 @@ test("vision client reports rate limiting only after every configured route fail
   }], "這是什麼？");
 
   assert.deepEqual(attemptedRoutes, DEFAULT_PROVIDER_ROUTES);
-  assert.match(result.error, /rate limited across provider routes/);
+  assert.match(result.error, /rate limited across routes/);
   assert.doesNotMatch(result.error, /Unterminated string/);
 });
 
-test("vision provider route configuration is normalized and falls back to safe defaults", () => {
+test("vision provider route configuration supports optional OpenRouter fallbacks", () => {
   assert.deepEqual(
     parseProviderRoutes(" Google-AI-Studio , google-ai-studio/flex, invalid route "),
     ["google-ai-studio", "google-ai-studio/flex"],
   );
-  assert.deepEqual(parseProviderRoutes("invalid route"), DEFAULT_PROVIDER_ROUTES);
+  assert.deepEqual(parseProviderRoutes("invalid route"), []);
+  assert.deepEqual(parseProviderRoutes(""), []);
 });
 
 test("vision client rejects non-Discord URLs and fails open", async () => {

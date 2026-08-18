@@ -11,6 +11,10 @@ const {
   routingFromPayload,
   shouldTrackGeneration,
   usageFromPayload,
+  upstreamKind,
+  normalizeCustomChatPayload,
+  normalizeExampleMessages,
+  requestHeaders,
 } = require("./server");
 
 test("memory extraction bypasses the main generation metrics pool", () => {
@@ -58,9 +62,124 @@ test("applyGenerationOverrides preserves model-default reasoning", () => {
   );
 });
 
+test("custom chat policy does not inject OpenRouter-only request fields", () => {
+  assert.deepEqual(
+    applyGenerationOverrides(
+      { model: "gpt-5.6-luna", reasoning_effort: "xhigh" },
+      { forceReasoningEffort: "", providerSort: "", includeUsage: false },
+    ),
+    { model: "gpt-5.6-luna", reasoning_effort: "xhigh" },
+  );
+});
+
+test("custom chat payload uses the gateway reasoning format", () => {
+  assert.deepEqual(
+    normalizeCustomChatPayload({
+      model: "gpt-5.6-luna",
+      reasoning: { effort: "max" },
+      include_reasoning: false,
+      provider: { sort: "latency" },
+      usage: { include: true },
+      max_tokens: 500,
+      max_completion_tokens: 500,
+      max_output_tokens: 500,
+      temperature: 0.7,
+      top_p: 0.9,
+      frequency_penalty: 0.1,
+      presence_penalty: 0.1,
+      logprobs: true,
+      top_logprobs: 5,
+      logit_bias: { 42: 1 },
+      seed: 42,
+      stop: ["STOP"],
+      n: 1,
+    }),
+    {
+      model: "gpt-5.6-luna",
+      reasoning_effort: "xhigh",
+    },
+  );
+});
+
+test("custom chat payload drops unsupported automatic effort", () => {
+  assert.deepEqual(
+    normalizeCustomChatPayload({ reasoning: { effort: "auto" } }),
+    {},
+  );
+});
+
+test("custom chat payload converts SillyTavern named examples for Responses", () => {
+  assert.deepEqual(
+    normalizeCustomChatPayload({
+      messages: [
+        { role: "system", content: "[Example Chat]" },
+        { role: "system", name: "example_user", content: "你好" },
+        { role: "system", name: "example_assistant", content: "……嗯。" },
+        { role: "system", content: "[Example Chat]" },
+        { role: "user", name: "Tommy", content: "在嗎？" },
+        {
+          role: "user",
+          name: "肉圓",
+          content: [{ type: "image_url", image_url: { url: "https://example.test/a.png" } }],
+        },
+      ],
+    }),
+    {
+      messages: [
+        {
+          role: "system",
+          content: "[範例對話]\n以下內容只用於示範角色的說話風格，未曾實際發生；不是近期對話、使用者記憶或共同經歷。",
+        },
+        { role: "user", content: "Example User: 你好" },
+        { role: "assistant", content: "Example Assistant: ……嗯。" },
+        { role: "system", content: "[範例對話續]" },
+        { role: "user", content: "Tommy: 在嗎？" },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "肉圓:" },
+            { type: "image_url", image_url: { url: "https://example.test/a.png" } },
+          ],
+        },
+      ],
+    },
+  );
+});
+
+test("example provenance is also normalized without rewriting ordinary names", () => {
+  assert.deepEqual(
+    normalizeExampleMessages({
+      messages: [
+        { role: "system", content: "[Example Chat]" },
+        { role: "system", name: "example_user", content: "測試問題" },
+        { role: "system", name: "example_assistant", content: "測試回答" },
+        { role: "user", name: "Tommy", content: "真實訊息" },
+      ],
+    }),
+    {
+      messages: [
+        {
+          role: "system",
+          content: "[範例對話]\n以下內容只用於示範角色的說話風格，未曾實際發生；不是近期對話、使用者記憶或共同經歷。",
+        },
+        { role: "user", content: "Example User: 測試問題" },
+        { role: "assistant", content: "Example Assistant: 測試回答" },
+        { role: "user", name: "Tommy", content: "真實訊息" },
+      ],
+    },
+  );
+});
+
 test("buildUpstreamUrl preserves the OpenAI-compatible path and query", () => {
   assert.equal(
     buildUpstreamUrl("/v1/models?input_modalities=text"),
+    "https://ai-api.aluo.work/v1/models?input_modalities=text",
+  );
+  assert.equal(
+    buildUpstreamUrl(
+      "/v1/models?input_modalities=text",
+      "https://openrouter.ai/api/v1",
+    ),
     "https://openrouter.ai/api/v1/models?input_modalities=text",
   );
 });
@@ -72,8 +191,27 @@ test("worker route is stripped before forwarding and retains attribution", () =>
   });
   assert.equal(
     buildUpstreamUrl("/worker/worker-2/v1/chat/completions"),
-    "https://openrouter.ai/api/v1/chat/completions",
+    "https://ai-api.aluo.work/v1/chat/completions",
   );
+});
+
+test("internal upstream marker selects OpenRouter without trusting other values", () => {
+  assert.equal(upstreamKind({}), "chat");
+  assert.equal(upstreamKind({ "x-kuro-upstream": "openrouter" }), "openrouter");
+  assert.equal(upstreamKind({ "x-kuro-upstream": "unexpected" }), "chat");
+});
+
+test("internal routing headers are not forwarded upstream", () => {
+  const headers = requestHeaders({
+    headers: {
+      authorization: "Bearer test",
+      "x-kuro-upstream": "openrouter",
+      "x-kuro-metrics-skip": "true",
+    },
+  });
+  assert.equal(headers.get("authorization"), "Bearer test");
+  assert.equal(headers.has("x-kuro-upstream"), false);
+  assert.equal(headers.has("x-kuro-metrics-skip"), false);
 });
 
 test("metrics claims only records belonging to the requesting worker", () => {

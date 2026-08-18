@@ -1,7 +1,7 @@
 "use strict";
 
-const DEFAULT_MODEL = "google/gemini-2.5-flash-lite";
-const DEFAULT_BASE_URL = "https://openrouter.ai/api/v1";
+const DEFAULT_MODEL = "gpt-5.6-luna";
+const DEFAULT_BASE_URL = "https://ai-api.aluo.work/v1";
 const DEFAULT_PROVIDER_ROUTES = Object.freeze([
   "google-ai-studio",
   "google-ai-studio/flex",
@@ -58,6 +58,9 @@ function booleanFlag(value, fallback) {
 }
 
 function parseProviderRoutes(value) {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return [];
+  }
   const candidates = Array.isArray(value)
     ? value
     : String(value || "").split(",");
@@ -68,7 +71,7 @@ function parseProviderRoutes(value) {
     if (!routes.includes(route)) routes.push(route);
     if (routes.length === 10) break;
   }
-  return routes.length > 0 ? routes : [...DEFAULT_PROVIDER_ROUTES];
+  return routes;
 }
 
 function openRouterError(payload) {
@@ -96,7 +99,7 @@ function visionUsageFromPayload(payload, providerRoute, durationMs = 0) {
   return {
     generationId: String(payload?.id || ""),
     model: String(payload?.model || ""),
-    provider: String(providerRoute || payload?.provider || ""),
+    provider: String(providerRoute || payload?.provider || "Unicode Gateway"),
     providerModel: String(payload?.model || ""),
     providerStatusCode: 200,
     usageAvailable: Boolean(usage && typeof usage === "object"),
@@ -230,7 +233,7 @@ function cleanStructuredString(value, maximum) {
 function parseStructuredVision(value) {
   const parsed = JSON.parse(String(value || ""));
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("OpenRouter vision returned invalid structured output");
+    throw new Error("Vision API returned invalid structured output");
   }
   const result = {};
   if (Object.hasOwn(parsed, "ocr")) {
@@ -274,7 +277,11 @@ function visionRequestFailed(images, result) {
 
 function createVisionClient(options = {}) {
   const enabled = options.enabled ?? process.env.VISION_ENABLED !== "false";
-  const apiKey = String(options.apiKey ?? process.env.OPENROUTER_API_KEY ?? "").trim();
+  const apiKey = String(
+    options.apiKey
+      ?? process.env.VISION_API_KEY
+      ?? "",
+  ).trim();
   const baseUrl = String(
     options.baseUrl
       ?? process.env.VISION_API_BASE_URL
@@ -282,6 +289,24 @@ function createVisionClient(options = {}) {
       ?? DEFAULT_BASE_URL,
   ).replace(/\/+$/, "");
   const model = String(options.model ?? process.env.VISION_MODEL ?? DEFAULT_MODEL).trim();
+  const configuredReasoningEffort = String(
+    options.reasoningEffort
+      ?? process.env.VISION_REASONING_EFFORT
+      ?? "max",
+  ).trim().toLowerCase();
+  const normalizedReasoningEffort = {
+    min: "minimal",
+    max: "xhigh",
+  }[configuredReasoningEffort] || configuredReasoningEffort;
+  const reasoningEffort = ["minimal", "low", "medium", "high", "xhigh"]
+    .includes(normalizedReasoningEffort)
+    ? normalizedReasoningEffort
+    : "xhigh";
+  const providerName = String(
+    options.providerName
+      ?? process.env.VISION_PROVIDER_NAME
+      ?? "Unicode Gateway",
+  ).trim() || "Unicode Gateway";
   const maxImages = positiveInt(
     options.maxImages ?? process.env.VISION_MAX_IMAGES,
     4,
@@ -530,29 +555,38 @@ function createVisionClient(options = {}) {
       ];
       try {
         const rateLimitFailures = [];
-        for (const providerRoute of providerRoutes) {
+        const requestRoutes = providerRoutes.length > 0 ? providerRoutes : [null];
+        for (const providerRoute of requestRoutes) {
+          const routeLabel = providerRoute || providerName;
           const providerStartedAt = Date.now();
+          const requestHeaders = {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+            "X-Title": "KuroHelper Vision",
+          };
+          const requestBody = {
+            model,
+            messages: [{ role: "user", content }],
+            reasoning_effort: reasoningEffort,
+            response_format: createVisionResponseFormat(missingFields),
+          };
+          if (providerRoute) {
+            requestHeaders["X-Kuro-Upstream"] = "openrouter";
+            delete requestBody.reasoning_effort;
+            requestBody.max_tokens = maxTokens;
+            requestBody.temperature = 0.1;
+            requestBody.reasoning = { enabled: false, exclude: true };
+            requestBody.usage = { include: true };
+            requestBody.provider = {
+              require_parameters: true,
+              only: [providerRoute],
+              allow_fallbacks: false,
+            };
+          }
           const response = await fetchImpl(`${baseUrl}/chat/completions`, {
             method: "POST",
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-              "Content-Type": "application/json",
-              "X-Title": "KuroHelper Vision",
-            },
-            body: JSON.stringify({
-              model,
-              messages: [{ role: "user", content }],
-              max_tokens: maxTokens,
-              temperature: 0.1,
-              reasoning: { enabled: false, exclude: true },
-              usage: { include: true },
-              response_format: createVisionResponseFormat(missingFields),
-              provider: {
-                require_parameters: true,
-                only: [providerRoute],
-                allow_fallbacks: false,
-              },
-            }),
+            headers: requestHeaders,
+            body: JSON.stringify(requestBody),
             signal: controller.signal,
           });
           const rawPayload = await response.text();
@@ -562,42 +596,42 @@ function createVisionClient(options = {}) {
           } catch {
             if (!response.ok) {
               throw new Error(
-                `OpenRouter vision returned HTTP ${response.status} from ${providerRoute}: ${rawPayload.slice(0, 500)}`,
+                `Vision API returned HTTP ${response.status} from ${routeLabel}: ${rawPayload.slice(0, 500)}`,
               );
             }
-            throw new Error(`OpenRouter vision returned invalid JSON from ${providerRoute}`);
+            throw new Error(`Vision API returned invalid JSON from ${routeLabel}`);
           }
 
           const upstreamError = openRouterError(payload);
           if (isRateLimitError(upstreamError, response.status)) {
             const message = openRouterErrorMessage(
               upstreamError,
-              `OpenRouter vision returned HTTP ${response.status}`,
+              `Vision API returned HTTP ${response.status}`,
             );
-            rateLimitFailures.push(`${providerRoute}: ${message}`);
+            rateLimitFailures.push(`${routeLabel}: ${message}`);
             continue;
           }
           if (!response.ok) {
             throw new Error(
-              `OpenRouter vision returned HTTP ${response.status} from ${providerRoute}: `
+              `Vision API returned HTTP ${response.status} from ${routeLabel}: `
               + openRouterErrorMessage(upstreamError, rawPayload.slice(0, 500)),
             );
           }
           if (upstreamError) {
             throw new Error(
-              `OpenRouter vision provider error from ${providerRoute}: `
+              `Vision API provider error from ${routeLabel}: `
               + openRouterErrorMessage(upstreamError, "unknown provider error"),
             );
           }
 
           usageRecords.push(visionUsageFromPayload(
             payload,
-            providerRoute,
+            routeLabel,
             Date.now() - providerStartedAt,
           ));
 
           const rawDescription = responseText(payload?.choices?.[0]?.message?.content);
-          if (!rawDescription) throw new Error("OpenRouter vision returned an empty description");
+          if (!rawDescription) throw new Error("Vision API returned an empty description");
           if (onRawResponse) {
             try {
               onRawResponse({
@@ -613,24 +647,24 @@ function createVisionClient(options = {}) {
           }
           const fetched = parseStructuredVision(rawDescription);
           if (missingFields.includes("ocr") && !Object.hasOwn(fetched, "ocr")) {
-            throw new Error("OpenRouter vision omitted requested OCR output");
+            throw new Error("Vision API omitted requested OCR output");
           }
           if (missingFields.includes("observation") && !Object.hasOwn(fetched, "observation")) {
-            throw new Error("OpenRouter vision omitted requested observation output");
+            throw new Error("Vision API omitted requested observation output");
           }
           const returnedModel = String(payload?.model || model);
           if (missingFields.includes("ocr")) {
             writeCache(ocrKey, {
               ocr: fetched.ocr,
               model: returnedModel,
-              providerRoute,
+              providerRoute: routeLabel,
             }, image, "ocr");
           }
           if (missingFields.includes("observation")) {
             writeCache(observationKey, {
               observation: fetched.observation,
               model: returnedModel,
-              providerRoute,
+              providerRoute: routeLabel,
             }, image, "observation");
           }
           const structured = {
@@ -643,7 +677,7 @@ function createVisionClient(options = {}) {
             description: JSON.stringify(structured),
             structured,
             model: returnedModel,
-            providerRoute,
+            providerRoute: routeLabel,
           };
           return {
             image,
@@ -656,7 +690,7 @@ function createVisionClient(options = {}) {
           };
         }
         throw new Error(
-          `OpenRouter vision rate limited across provider routes: ${rateLimitFailures.join("; ")}`,
+          `Vision API rate limited across routes: ${rateLimitFailures.join("; ")}`,
         );
       } catch (error) {
         return {

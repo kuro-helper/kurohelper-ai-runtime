@@ -3,8 +3,11 @@
 function applyGenerationPolicy(payload, options = {}) {
   const forceReasoningEffort = options.forceReasoningEffort ?? "";
   const providerSort = options.providerSort ?? "";
+  const includeUsage = options.includeUsage ?? true;
 
-  payload.usage = { ...(payload.usage || {}), include: true };
+  if (includeUsage) {
+    payload.usage = { ...(payload.usage || {}), include: true };
+  }
   if (providerSort) {
     payload.provider = { ...(payload.provider || {}), sort: providerSort };
   }

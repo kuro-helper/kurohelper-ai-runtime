@@ -17,9 +17,9 @@ Copy-Item ../kurohelper/.env.example ../kurohelper/.env
 ```
 
 All user-facing AI Runtime settings are centralized in `.env`; `server/config.js`
-only loads and validates those values. Set the OpenRouter configuration and
-character-card paths in `.env`, then generate and synchronize the shared
-runtime secret:
+only loads and validates those values. Set `CHAT_API_KEY`, `MEMORY_API_KEY`, and
+`VISION_API_KEY` independently, configure the character-card paths, then
+generate and synchronize the shared runtime secret:
 
 ```powershell
 npm run configure-runtime-secret

@@ -13,12 +13,12 @@ test('buildRequestContextPrompt formats Taipei time and separates the user from 
   assert.doesNotMatch(prompt, /禁止|不得描寫|不得描述/);
   assert.match(
     prompt,
-    /輸出格式：只輸出小黑實際說出的台詞，不使用括號、星號或第三人稱旁白格式。/,
+    /輸出格式：直接輸出實際台詞，無需用直角括號包住，也不需要描述角色動作，像個普通群組成員一樣就好/,
   );
   assert.doesNotMatch(prompt, /害羞、猶豫與停頓只用/);
   assert.match(
     prompt,
-    /輸出格式：只輸出小黑實際說出的台詞，不使用括號、星號或第三人稱旁白格式。$/,
+    /輸出格式：直接輸出實際台詞，無需用直角括號包住，也不需要描述角色動作，像個普通群組成員一樣就好$/,
   );
 });
 

@@ -36,18 +36,36 @@ EMBEDDING_MODEL = os.getenv(
     "MEMORY_EMBEDDING_MODEL",
     "BAAI/bge-small-zh-v1.5",
 )
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
-OPENROUTER_BASE_URL = (
+EXTRACTION_API_KEY = os.getenv("MEMORY_API_KEY", "").strip()
+EXTRACTION_BASE_URL = (
     os.getenv(
-        "OPENROUTER_BASE_URL",
-        "https://openrouter.ai/api/v1",
+        "MEMORY_API_BASE_URL",
+        os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
     )
     .strip()
     .rstrip("/")
 )
-OPENROUTER_MODEL = os.getenv(
+EXTRACTION_MODEL = os.getenv(
     "MEMORY_EXTRACTION_MODEL",
-    os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash"),
+    os.getenv("OPENROUTER_MODEL", "gpt-5.6-luna"),
+).strip()
+_configured_extraction_effort = os.getenv(
+    "MEMORY_EXTRACTION_REASONING_EFFORT",
+    "max",
+).strip().lower()
+EXTRACTION_REASONING_EFFORT = {
+    "min": "minimal",
+    "max": "xhigh",
+}.get(_configured_extraction_effort, _configured_extraction_effort)
+if EXTRACTION_REASONING_EFFORT not in {"minimal", "low", "medium", "high", "xhigh"}:
+    logger.warning(
+        "Invalid MEMORY_EXTRACTION_REASONING_EFFORT=%s; using xhigh",
+        _configured_extraction_effort,
+    )
+    EXTRACTION_REASONING_EFFORT = "xhigh"
+EXTRACTION_PROVIDER = os.getenv(
+    "MEMORY_EXTRACTION_PROVIDER",
+    "Unicode Gateway",
 ).strip()
 MAINTENANCE_INTERVAL_SECONDS = max(
     900,
@@ -324,7 +342,8 @@ async def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "embedding_model": EMBEDDING_MODEL,
-        "extraction_model": OPENROUTER_MODEL,
+        "extraction_model": EXTRACTION_MODEL,
+        "extraction_reasoning_effort": EXTRACTION_REASONING_EFFORT,
         "stats": await asyncio.to_thread(store.stats),
         "trash_retention_days": TRASH_RETENTION_DAYS,
         "backup_enabled": BACKUP_ENABLED,
@@ -631,12 +650,12 @@ def _memory_extraction_metrics(
     )
     return {
         "status": status,
-        "model": str(payload.get("model") or OPENROUTER_MODEL),
+        "model": str(payload.get("model") or EXTRACTION_MODEL),
         "provider": str(
             selected_endpoint.get("provider")
             or successful_attempt.get("provider")
             or payload.get("provider")
-            or ""
+            or EXTRACTION_PROVIDER
         ),
         "providerModel": str(
             selected_endpoint.get("model") or successful_attempt.get("model") or ""
@@ -667,8 +686,8 @@ def _memory_extraction_metrics(
 
 
 async def _extract_and_apply(turn: dict[str, Any]) -> dict[str, Any]:
-    if not OPENROUTER_API_KEY:
-        logger.warning("Skipping memory extraction: OPENROUTER_API_KEY is empty")
+    if not EXTRACTION_API_KEY:
+        logger.warning("Skipping memory extraction: MEMORY_API_KEY is empty")
         return {"status": "skipped", "metrics": None}
     store = runtime.store
     if store is None:
@@ -725,11 +744,9 @@ async def _extract_and_apply(turn: dict[str, Any]) -> dict[str, Any]:
         return {"status": "skipped", "reason": skip_reason, "metrics": None}
 
     body = {
-        "model": OPENROUTER_MODEL,
+        "model": EXTRACTION_MODEL,
         "messages": build_candidate_messages(turn, known_participants),
-        "temperature": 0,
-        "max_tokens": 350,
-        "reasoning": {"effort": "none", "exclude": True},
+        "reasoning_effort": EXTRACTION_REASONING_EFFORT,
     }
 
     started_at = time.perf_counter()
@@ -738,9 +755,9 @@ async def _extract_and_apply(turn: dict[str, Any]) -> dict[str, Any]:
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(
-                f"{OPENROUTER_BASE_URL}/chat/completions",
+                f"{EXTRACTION_BASE_URL}/chat/completions",
                 headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Authorization": f"Bearer {EXTRACTION_API_KEY}",
                     "Content-Type": "application/json",
                     "X-Title": "Kuro Discord Memory",
                     "X-Kuro-Metrics-Skip": "true",

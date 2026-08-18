@@ -2,13 +2,17 @@
 
 import fs from 'node:fs';
 
-const [jsonPath, pngPath] = process.argv.slice(2);
+const [jsonPath, pngPath, ...flags] = process.argv.slice(2);
+const examplesOnly = flags.includes('--examples-only');
 if (!jsonPath || !pngPath) {
   throw new Error(
-    'Usage: node scripts/refine-kuro-discord-card.mjs <*.discord.json> <*.discord.png>',
+    'Usage: node scripts/refine-kuro-discord-card.mjs <*.discord.json> <*.discord.png> [--examples-only]',
   );
 }
-if (!jsonPath.endsWith('.discord.json') || !pngPath.endsWith('.discord.png')) {
+if (
+  !/\.discord(?:\.dedup)?\.json$/u.test(jsonPath) ||
+  !/\.discord(?:\.dedup)?\.png$/u.test(pngPath)
+) {
   throw new Error('Refusing to modify a non-.discord character card');
 }
 
@@ -173,11 +177,13 @@ const refiners = {
   mes_example: refineExamples,
 };
 
-for (const [field, refine] of Object.entries(refiners)) {
-  const current = card.data?.[field] ?? card[field] ?? '';
-  const refined = refine(current);
-  card[field] = refined;
-  card.data[field] = refined;
+if (!examplesOnly) {
+  for (const [field, refine] of Object.entries(refiners)) {
+    const current = card.data?.[field] ?? card[field] ?? '';
+    const refined = refine(current);
+    card[field] = refined;
+    card.data[field] = refined;
+  }
 }
 
 function removeRequestedSpeechTics(value, field) {
@@ -201,11 +207,26 @@ function removeRequestedSpeechTics(value, field) {
       '{{user}}: 「真的？」\n{{char}}: 「……咕嘰咕嘰。」\n{{user}}: 「那是什麼意思？」\n{{char}}: 「……害羞的意思。還有，一點點……不高興的意思。」',
       '{{user}}: 「真的？」\n{{char}}: 「才、才沒有。只是……有一點點，不高興。」',
     );
+    result = result.replace(/[「」]/gu, '');
+    result = result
+      .split('\n')
+      .map((line) => {
+        const match = line.match(/^(\{\{user\}\}|\{\{char\}\}):\s?(.*)$/u);
+        if (!match) return line;
+        const content = match[2]
+          .replaceAll('{{user}}', 'Example User')
+          .replaceAll('{{char}}', 'Example Assistant');
+        return `${match[1]}: ${content}`;
+      })
+      .join('\n');
   }
   return result;
 }
 
-for (const field of ['description', 'system_prompt', 'mes_example']) {
+const fieldsToClean = examplesOnly
+  ? ['mes_example']
+  : ['description', 'system_prompt', 'mes_example'];
+for (const field of fieldsToClean) {
   const refined = removeRequestedSpeechTics(card.data[field], field);
   card[field] = refined;
   card.data[field] = refined;
@@ -215,7 +236,7 @@ for (const field of ['description', 'system_prompt', 'mes_example']) {
 // Its original prose is rich in physical action cues, which conflicts with
 // the Discord card's dialogue-only presentation. The same personality and
 // relationship information is already present in the main card fields.
-if (card.data?.extensions?.depth_prompt) {
+if (!examplesOnly && card.data?.extensions?.depth_prompt) {
   card.data.extensions.depth_prompt.prompt = '';
 }
 

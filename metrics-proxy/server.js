@@ -7,7 +7,10 @@ const { applyGenerationPolicy } = require("./generation-policy");
 
 const PORT = positiveInt(process.env.METRICS_PROXY_PORT, 8081);
 const UPSTREAM_BASE_URL = String(
-  process.env.METRICS_UPSTREAM_BASE_URL || "https://openrouter.ai/api/v1",
+  process.env.METRICS_UPSTREAM_BASE_URL || "https://ai-api.aluo.work/v1",
+).replace(/\/+$/, "");
+const OPENROUTER_UPSTREAM_BASE_URL = String(
+  process.env.METRICS_OPENROUTER_UPSTREAM_BASE_URL || "https://openrouter.ai/api/v1",
 ).replace(/\/+$/, "");
 const RECORD_TTL_MS = positiveInt(
   process.env.METRICS_RECORD_TTL_SECONDS,
@@ -105,7 +108,133 @@ function applyGenerationOverrides(payload, options = {}) {
   return applyGenerationPolicy(payload, {
     forceReasoningEffort,
     providerSort,
+    includeUsage: options.includeUsage,
   });
+}
+
+const EXAMPLE_CHAT_MARKER = "[Example Chat]";
+const EXAMPLE_CHAT_NOTICE =
+  "[範例對話]\n以下內容只用於示範角色的說話風格，未曾實際發生；不是近期對話、使用者記憶或共同經歷。";
+
+function prefixMessageContent(message, label) {
+  if (typeof message.content === "string") {
+    message.content = `${label}: ${message.content}`;
+    return;
+  }
+  if (!Array.isArray(message.content)) return;
+  const textPart = message.content.find(
+    (part) => part && typeof part === "object"
+      && part.type === "text"
+      && typeof part.text === "string",
+  );
+  if (textPart) {
+    textPart.text = `${label}: ${textPart.text}`;
+  } else {
+    message.content.unshift({ type: "text", text: `${label}:` });
+  }
+}
+
+function normalizeExampleMessages(payload) {
+  if (!Array.isArray(payload.messages)) return payload;
+  let exampleSectionStarted = false;
+  for (const message of payload.messages) {
+    if (!message || typeof message !== "object") continue;
+    if (
+      message.role === "system"
+      && typeof message.content === "string"
+      && message.content.trim() === EXAMPLE_CHAT_MARKER
+    ) {
+      message.content = exampleSectionStarted
+        ? "[範例對話續]"
+        : EXAMPLE_CHAT_NOTICE;
+      exampleSectionStarted = true;
+      continue;
+    }
+
+    const name = String(message.name || "").trim();
+    if (name === "example_user") {
+      delete message.name;
+      message.role = "user";
+      prefixMessageContent(message, "Example User");
+      continue;
+    }
+    if (name === "example_assistant") {
+      delete message.name;
+      message.role = "assistant";
+      prefixMessageContent(message, "Example Assistant");
+    }
+  }
+  return payload;
+}
+
+function normalizeCustomChatPayload(payload) {
+  normalizeExampleMessages(payload);
+  const configuredEffort = String(
+    payload.reasoning_effort || payload.reasoning?.effort || "",
+  ).trim().toLowerCase();
+  const effort = {
+    min: "minimal",
+    max: "xhigh",
+  }[configuredEffort] || configuredEffort;
+  if (["minimal", "low", "medium", "high", "xhigh"].includes(effort)) {
+    payload.reasoning_effort = effort;
+  } else {
+    delete payload.reasoning_effort;
+  }
+  delete payload.reasoning;
+  delete payload.include_reasoning;
+  delete payload.provider;
+  delete payload.usage;
+  delete payload.max_tokens;
+  delete payload.max_completion_tokens;
+  delete payload.max_output_tokens;
+  delete payload.temperature;
+  delete payload.top_p;
+  delete payload.frequency_penalty;
+  delete payload.presence_penalty;
+  delete payload.logprobs;
+  delete payload.top_logprobs;
+  delete payload.logit_bias;
+  delete payload.seed;
+  delete payload.stop;
+  delete payload.n;
+
+  if (Array.isArray(payload.messages)) {
+    for (const message of payload.messages) {
+      if (!message || typeof message !== "object" || !("name" in message)) {
+        continue;
+      }
+      const name = String(message.name || "")
+        .replace(/[\r\n:]+/g, " ")
+        .trim()
+        .slice(0, 64);
+      delete message.name;
+
+      if (name === "example_system") {
+        message.role = "system";
+        continue;
+      }
+      if (!name) continue;
+
+      if (typeof message.content === "string") {
+        message.content = `${name}: ${message.content}`;
+        continue;
+      }
+      if (Array.isArray(message.content)) {
+        const textPart = message.content.find(
+          (part) => part && typeof part === "object"
+            && part.type === "text"
+            && typeof part.text === "string",
+        );
+        if (textPart) {
+          textPart.text = `${name}: ${textPart.text}`;
+        } else {
+          message.content.unshift({ type: "text", text: `${name}:` });
+        }
+      }
+    }
+  }
+  return payload;
 }
 
 function parseSseEvents(state, chunk, onPayload) {
@@ -136,10 +265,17 @@ function requestRoute(requestUrl) {
   return { url, workerId };
 }
 
-function buildUpstreamUrl(requestUrl) {
+function upstreamKind(headers = {}) {
+  const requested = String(headers["x-kuro-upstream"] || "")
+    .trim()
+    .toLowerCase();
+  return requested === "openrouter" ? "openrouter" : "chat";
+}
+
+function buildUpstreamUrl(requestUrl, baseUrl = UPSTREAM_BASE_URL) {
   const { url } = requestRoute(requestUrl);
   const suffix = url.pathname.replace(/^\/v1(?=\/|$)/, "");
-  return `${UPSTREAM_BASE_URL}${suffix}${url.search}`;
+  return `${baseUrl}${suffix}${url.search}`;
 }
 
 async function readBody(request) {
@@ -158,7 +294,14 @@ function requestHeaders(request) {
   for (const [name, value] of Object.entries(request.headers)) {
     if (
       value == null ||
-      ["host", "content-length", "connection", "accept-encoding", "x-kuro-metrics-skip"].includes(name)
+      [
+        "host",
+        "content-length",
+        "connection",
+        "accept-encoding",
+        "x-kuro-metrics-skip",
+        "x-kuro-upstream",
+      ].includes(name)
     ) {
       continue;
     }
@@ -245,6 +388,11 @@ function claimRecords(since, workerId = "", sourceRecords = records) {
 async function proxyRequest(request, response) {
   const startedAt = Date.now();
   const { workerId } = requestRoute(request.url);
+  const selectedUpstream = upstreamKind(request.headers);
+  const isOpenRouter = selectedUpstream === "openrouter";
+  const upstreamBaseUrl = isOpenRouter
+    ? OPENROUTER_UPSTREAM_BASE_URL
+    : UPSTREAM_BASE_URL;
   const isGeneration =
     request.method === "POST" &&
     new URL(request.url, "http://metrics-proxy.invalid").pathname.endsWith(
@@ -280,22 +428,39 @@ async function proxyRequest(request, response) {
       requestedModel = String(parsed.model || "");
       trace.model = requestedModel;
       streamed = parsed.stream === true;
-      applyGenerationOverrides(parsed);
+      applyGenerationOverrides(parsed, {
+        forceReasoningEffort: isOpenRouter ? FORCE_REASONING_EFFORT : "",
+        providerSort: isOpenRouter ? PROVIDER_SORT : "",
+        includeUsage: isOpenRouter,
+      });
+      if (isOpenRouter) {
+        normalizeExampleMessages(parsed);
+      } else {
+        normalizeCustomChatPayload(parsed);
+      }
       body = Buffer.from(JSON.stringify(parsed));
     } catch {
       // Forward malformed JSON unchanged so the upstream returns its normal error.
     }
   }
 
-  generationLog("started", trace, { model: requestedModel });
+  generationLog("started", trace, {
+    model: requestedModel,
+    upstream: selectedUpstream,
+  });
 
   const headers = requestHeaders(request);
-  if (isGeneration) headers.set("x-openrouter-metadata", "enabled");
-  const upstream = await requestUpstream(buildUpstreamUrl(request.url), {
-    method: request.method,
-    headers,
-    body,
-  });
+  if (isGeneration && isOpenRouter) {
+    headers.set("x-openrouter-metadata", "enabled");
+  }
+  const upstream = await requestUpstream(
+    buildUpstreamUrl(request.url, upstreamBaseUrl),
+    {
+      method: request.method,
+      headers,
+      body,
+    },
+  );
   const headersAt = Date.now();
   generationLog("upstream_headers", trace, {
     model: requestedModel,
@@ -368,7 +533,7 @@ async function proxyRequest(request, response) {
     streamed,
     statusCode: upstream.statusCode,
     finishReason,
-    provider: routing?.provider || "",
+    provider: routing?.provider || (isOpenRouter ? "" : "Unicode Gateway"),
     providerModel: routing?.providerModel || "",
     routingStrategy: routing?.routingStrategy || "",
     routingRegion: routing?.routingRegion || "",
@@ -392,7 +557,13 @@ async function proxyRequest(request, response) {
 async function handler(request, response) {
   const url = new URL(request.url, "http://metrics-proxy.invalid");
   if (request.method === "GET" && url.pathname === "/health") {
-    writeJson(response, 200, { status: "ok", upstream: UPSTREAM_BASE_URL });
+    writeJson(response, 200, {
+      status: "ok",
+      upstreams: {
+        chat: UPSTREAM_BASE_URL,
+        openrouter: OPENROUTER_UPSTREAM_BASE_URL,
+      },
+    });
     return;
   }
   if (request.method === "GET" && url.pathname === "/internal/metrics/claim") {
@@ -435,7 +606,11 @@ module.exports = {
   buildUpstreamUrl,
   claimRecords,
   parseSseEvents,
+  normalizeCustomChatPayload,
+  normalizeExampleMessages,
   requestRoute,
+  requestHeaders,
+  upstreamKind,
   routingFromPayload,
   shouldTrackGeneration,
   requestUpstream,
