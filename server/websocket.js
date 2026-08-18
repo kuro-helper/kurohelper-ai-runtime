@@ -317,15 +317,21 @@ const pluginLoader = createPluginLoader({
       const frontend = getFrontend(platform);
       if (typeof frontend?.sendMetric === 'function') {
         try {
-          await Promise.all(vision.metricRecords.map((metrics, index) =>
-            frontend.sendMetric(chatId, {
-              requestId: `${metadata.requestId}:vision:${index}`,
-              sourceRequestId: metadata.requestId,
-              operation: 'vision',
-              metrics,
-            })));
+          await Promise.all(
+            vision.metricRecords.map((metrics, index) =>
+              frontend.sendMetric(chatId, {
+                requestId: `${metadata.requestId}:vision:${index}`,
+                sourceRequestId: metadata.requestId,
+                operation: 'vision',
+                metrics,
+              }),
+            ),
+          );
         } catch (error) {
-          log('warn', `[Vision] Could not report usage metrics: ${error.message}`);
+          log(
+            'warn',
+            `[Vision] Could not report usage metrics: ${error.message}`,
+          );
         }
       }
     }
@@ -349,7 +355,15 @@ const pluginLoader = createPluginLoader({
       });
       return true;
     }
-    const recentChannelContext = metadata.recentChannelContext || '';
+    const recentMessages = Array.isArray(metadata.recentMessages)
+      ? metadata.recentMessages
+      : null;
+    const visionObservations = Array.isArray(vision.structured)
+      ? vision.structured
+      : null;
+    const memoryEntries = Array.isArray(memory.memories)
+      ? memory.memories
+      : null;
     const generationPacket = {
       type: 'user_message',
       text,
@@ -361,18 +375,18 @@ const pluginLoader = createPluginLoader({
       displayName: metadata.displayName || '',
       mentionedUsers: metadata.mentionedUsers || [],
       contextParticipants: metadata.contextParticipants || [],
-      recentChannelContext,
-      recentMessages: Array.isArray(metadata.recentMessages)
-        ? metadata.recentMessages
-        : [],
+      recentChannelContext: recentMessages
+        ? ''
+        : metadata.recentChannelContext || '',
       replyTo: metadata.replyTo || null,
-      visionContext: vision.context || '',
-      visionObservations: Array.isArray(vision.structured) ? vision.structured : [],
-      memoryRecentContext: metadata.retrievalText || '',
-      memoryContext: memory.context || '',
+      visionContext: visionObservations ? '' : vision.context || '',
+      visionObservations: visionObservations || [],
+      memoryContext: memoryEntries ? '' : memory.context || '',
       memoryRecallMs: memory.elapsedMs || 0,
       visionMs: vision.elapsedMs || 0,
       visionModel: vision.model || '',
+      ...(recentMessages ? { recentMessages } : {}),
+      ...(memoryEntries ? { memoryEntries } : {}),
       ...(mappedPersona ? { mappedPersona } : {}),
       ...(userLocale ? { userLocale } : {}),
     };
@@ -385,18 +399,16 @@ const pluginLoader = createPluginLoader({
           'warn',
           `[Workers] Request ${(metadata.requestId || 'unknown').slice(-8)} failed: ${error.message}`,
         );
-        fanout(
-          conversationId,
-          'sendText',
-          '生成工作頁中斷，請再試一次。',
-          {
-            kind: 'error',
-            requestId: metadata.requestId || '',
-            final: true,
-            metrics: { status: 'worker_disconnected' },
-          },
-        ).catch((fanoutError) =>
-          log('warn', `[Workers] Could not report dropped request: ${fanoutError.message}`),
+        fanout(conversationId, 'sendText', '生成工作頁中斷，請再試一次。', {
+          kind: 'error',
+          requestId: metadata.requestId || '',
+          final: true,
+          metrics: { status: 'worker_disconnected' },
+        }).catch((fanoutError) =>
+          log(
+            'warn',
+            `[Workers] Could not report dropped request: ${fanoutError.message}`,
+          ),
         );
       },
     });
@@ -424,8 +436,7 @@ const pluginLoader = createPluginLoader({
   onCommand(platform, chatId, command, args, userId = '') {
     dispatchCommand(platform, chatId, command, args, userId);
   },
-  isSillyTavernReady: () =>
-    workerPool.hasWorkers(),
+  isSillyTavernReady: () => workerPool.hasWorkers(),
   listRawReplies,
   getVisionCacheStats,
   log,
@@ -443,8 +454,10 @@ log('log', `[Bridge] WebSocket server listening on port ${wssPort}`);
 
 function workerIdFromRequest(request) {
   try {
-    const value = new URL(request?.url || '/', 'ws://localhost').searchParams
-      .get('workerId');
+    const value = new URL(
+      request?.url || '/',
+      'ws://localhost',
+    ).searchParams.get('workerId');
     const normalized = String(value || '')
       .trim()
       .replace(/[^a-zA-Z0-9_.-]/g, '-')
@@ -499,7 +512,10 @@ wss.on('connection', (ws, request) => {
         typeof message === 'string' ? message : message.toString('utf8'),
       );
     } catch (err) {
-      log('warn', `[Bridge] Dropping invalid JSON packet from ${workerId}: ${err.message}`);
+      log(
+        'warn',
+        `[Bridge] Dropping invalid JSON packet from ${workerId}: ${err.message}`,
+      );
       return;
     }
 
@@ -543,7 +559,10 @@ wss.on('connection', (ws, request) => {
     messageTail = messageTail
       .then(() => processWorkerMessage(message))
       .catch((error) =>
-        log('warn', `[Bridge] Packet from ${workerId} failed: ${error.message}`),
+        log(
+          'warn',
+          `[Bridge] Packet from ${workerId} failed: ${error.message}`,
+        ),
       );
   });
 

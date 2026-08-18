@@ -15,11 +15,86 @@ function positiveInt(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function cleanInline(value, limit = 1000) {
+  return String(value || "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, limit);
+}
+
+function normalizeMemoryEntries(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .slice(0, 10)
+    .map((entry) => ({
+      id: cleanInline(entry?.id, 100),
+      key: cleanInline(entry?.key, 160),
+      summary: cleanInline(entry?.summary || entry?.value, 1000),
+      category: cleanInline(entry?.category, 40),
+      scope: entry?.scope === "global" ? "global" : "channel",
+      scopeId: cleanInline(entry?.scope_id || entry?.scopeId, 100),
+      participants: (Array.isArray(entry?.participants)
+        ? entry.participants
+        : []
+      )
+        .slice(0, 25)
+        .map((participant) => ({
+          id: cleanInline(participant?.id, 120),
+          displayName: cleanInline(
+            participant?.display_name || participant?.displayName,
+            100,
+          ),
+          role: cleanInline(participant?.role, 32),
+        }))
+        .filter((participant) => participant.id),
+      score: Math.max(0, Math.min(Number(entry?.score) || 0, 1)),
+    }))
+    .filter((entry) => entry.id && entry.summary && entry.category);
+}
+
+function normalizeRecentMessages(messages) {
+  if (!Array.isArray(messages)) return [];
+  return messages
+    .slice(-20)
+    .map((message) => {
+      const reply = message?.replyTo;
+      return {
+        id: cleanInline(message?.id, 100),
+        user_id: cleanInline(message?.userId, 100),
+        display_name: cleanInline(message?.displayName, 100),
+        content: String(message?.content || "")
+          .trim()
+          .slice(0, 1500),
+        assistant: message?.assistant === true,
+        created_at: String(message?.createdAt || "").slice(0, 100),
+        reply_to:
+          reply && typeof reply === "object"
+            ? {
+                message_id: cleanInline(reply.messageId, 100),
+                user_id: cleanInline(reply.userId, 100),
+                display_name: cleanInline(reply.displayName, 100),
+                content: cleanInline(reply.content, 300),
+                assistant: reply.assistant === true,
+                image_count: Math.max(
+                  0,
+                  Math.min(Number(reply.imageCount) || 0, 10),
+                ),
+                unavailable: reply.unavailable === true,
+              }
+            : null,
+      };
+    })
+    .filter((message) => message.id && message.display_name && message.content);
+}
+
 function createMemoryClient(options = {}) {
   const enabled =
     options.enabled ?? parseEnabled(process.env.MEMORY_ENABLED, false);
   const baseUrl = String(
-    options.baseUrl || process.env.MEMORY_SERVICE_URL || "http://memory-service:8090",
+    options.baseUrl ||
+      process.env.MEMORY_SERVICE_URL ||
+      "http://memory-service:8090",
   ).replace(/\/+$/, "");
   const timeoutMs = positiveInt(
     options.timeoutMs || process.env.MEMORY_RECALL_TIMEOUT_MS,
@@ -56,7 +131,12 @@ function createMemoryClient(options = {}) {
     }
   }
 
-  async function recall({ query, limit = 5, channelId = "", participantIds = [] }) {
+  async function recall({
+    query,
+    limit = 5,
+    channelId = "",
+    participantIds = [],
+  }) {
     if (!enabled || !String(query || "").trim()) {
       return { context: "", memories: [], elapsedMs: 0 };
     }
@@ -70,14 +150,17 @@ function createMemoryClient(options = {}) {
           limit: Math.max(1, Math.min(Number(limit) || 5, 10)),
           channel_id: String(channelId || ""),
           participant_ids: Array.isArray(participantIds)
-            ? [...new Set(participantIds.map(String).filter(Boolean))].slice(0, 25)
+            ? [...new Set(participantIds.map(String).filter(Boolean))].slice(
+                0,
+                25,
+              )
             : [],
         },
         timeoutMs,
       );
       return {
         context: String(result?.context || "").slice(0, 8_000),
-        memories: Array.isArray(result?.memories) ? result.memories : [],
+        memories: normalizeMemoryEntries(result?.memories),
         elapsedMs: Date.now() - startedAt,
       };
     } catch (error) {
@@ -100,27 +183,30 @@ function createMemoryClient(options = {}) {
         return await post(
           "/v1/turns",
           {
-          request_id: String(turn.requestId || ""),
-          character_id: characterId,
-          user_id: String(turn.userId),
-          channel_id: String(turn.channelId || ""),
-          display_name: String(turn.displayName || ""),
-          mentioned_users: Array.isArray(turn.mentionedUsers)
-            ? turn.mentionedUsers.slice(0, 25).map((user) => ({
-                id: String(user?.id || ""),
-                display_name: String(user?.displayName || ""),
-              }))
-            : [],
-          context_participants: Array.isArray(turn.contextParticipants)
-            ? turn.contextParticipants.slice(0, 25).map((user) => ({
-                id: String(user?.id || ""),
-                display_name: String(user?.displayName || ""),
-              })).filter((user) => user.id)
-            : [],
-          recent_context: String(turn.recentContext || "").slice(0, 8_000),
-          user_text: String(turn.userText),
-          assistant_text: String(turn.assistantText),
-        },
+            request_id: String(turn.requestId || ""),
+            character_id: characterId,
+            user_id: String(turn.userId),
+            channel_id: String(turn.channelId || ""),
+            display_name: String(turn.displayName || ""),
+            mentioned_users: Array.isArray(turn.mentionedUsers)
+              ? turn.mentionedUsers.slice(0, 25).map((user) => ({
+                  id: String(user?.id || ""),
+                  display_name: String(user?.displayName || ""),
+                }))
+              : [],
+            context_participants: Array.isArray(turn.contextParticipants)
+              ? turn.contextParticipants
+                  .slice(0, 25)
+                  .map((user) => ({
+                    id: String(user?.id || ""),
+                    display_name: String(user?.displayName || ""),
+                  }))
+                  .filter((user) => user.id)
+              : [],
+            recent_messages: normalizeRecentMessages(turn.recentMessages),
+            user_text: String(turn.userText),
+            assistant_text: String(turn.assistantText),
+          },
           65_000,
         );
       } catch (error) {
@@ -155,7 +241,11 @@ function createMemoryClient(options = {}) {
     }
   }
 
-  async function listMemories({ status = "active", limit = 20, offset = 0 } = {}) {
+  async function listMemories({
+    status = "active",
+    limit = 20,
+    offset = 0,
+  } = {}) {
     const selectedStatus = ["active", "pending", "deleted"].includes(status)
       ? status
       : "active";

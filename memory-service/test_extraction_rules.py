@@ -2,37 +2,53 @@ import unittest
 
 from extraction_rules import validate_operations
 
-
 KNOWN = [
-    {"id": "discord:test-user-001", "display_name": "TestUserA", "role": "current_speaker"},
-    {"id": "discord:test-user-002", "display_name": "TestUserB", "role": "recent_speaker"},
+    {
+        "id": "discord:test-user-001",
+        "display_name": "TestUserA",
+        "role": "current_speaker",
+    },
+    {
+        "id": "discord:test-user-002",
+        "display_name": "TestUserB",
+        "role": "recent_speaker",
+    },
     {"id": "kuro", "display_name": "Kuro", "role": "assistant"},
 ]
 
 
-def turn(text: str, recent_context: str = "") -> dict:
+def turn(
+    text: str,
+    recent_context: str = "",
+    recent_messages: list[dict] | None = None,
+) -> dict:
     return {
         "user_id": "test-user-001",
         "display_name": "TestUserA",
         "channel_id": "discord:test-channel-001",
         "user_text": text,
         "recent_context": recent_context,
+        "recent_messages": recent_messages or [],
     }
 
 
 class ExtractionRuleTests(unittest.TestCase):
     def test_accepts_explicit_first_person_preference_as_event_memory(self):
         accepted, rejected = validate_operations(
-            [{
-                "action": "ADD",
-                "scope": "channel",
-                "category": "user_preference",
-                "attribute_key": "food.ice_pop.flavor",
-                "summary": "TestUserA表示喜歡紅豆口味的冰棒。",
-                "participants": [{"id": "discord:test-user-001", "role": "speaker"}],
-                "importance": 0.6,
-                "confidence": 1.0,
-            }],
+            [
+                {
+                    "action": "ADD",
+                    "scope": "channel",
+                    "category": "user_preference",
+                    "attribute_key": "food.ice_pop.flavor",
+                    "summary": "TestUserA表示喜歡紅豆口味的冰棒。",
+                    "participants": [
+                        {"id": "discord:test-user-001", "role": "speaker"}
+                    ],
+                    "importance": 0.6,
+                    "confidence": 1.0,
+                }
+            ],
             turn("我喜歡吃紅豆口味的冰棒"),
             KNOWN,
         )
@@ -43,16 +59,18 @@ class ExtractionRuleTests(unittest.TestCase):
 
     def test_rejects_identity_question_even_if_model_calls_it_memory(self):
         accepted, rejected = validate_operations(
-            [{
-                "action": "ADD",
-                "scope": "channel",
-                "category": "conversation_event",
-                "attribute_key": "assistant.identity",
-                "summary": "Kuro 確認自己不是千和或小黑。",
-                "participants": [{"id": "kuro"}],
-                "importance": 0.8,
-                "confidence": 1.0,
-            }],
+            [
+                {
+                    "action": "ADD",
+                    "scope": "channel",
+                    "category": "conversation_event",
+                    "attribute_key": "assistant.identity",
+                    "summary": "Kuro 確認自己不是千和或小黑。",
+                    "participants": [{"id": "kuro"}],
+                    "importance": 0.8,
+                    "confidence": 1.0,
+                }
+            ],
             turn("你是千和還是小黑？"),
             KNOWN,
         )
@@ -61,16 +79,18 @@ class ExtractionRuleTests(unittest.TestCase):
 
     def test_rejects_assistant_derived_preference(self):
         accepted, rejected = validate_operations(
-            [{
-                "action": "ADD",
-                "scope": "channel",
-                "category": "conversation_event",
-                "attribute_key": "preferred_name",
-                "summary": "Kuro 不喜歡被叫小黑。",
-                "participants": [{"id": "kuro"}],
-                "importance": 0.8,
-                "confidence": 0.9,
-            }],
+            [
+                {
+                    "action": "ADD",
+                    "scope": "channel",
+                    "category": "conversation_event",
+                    "attribute_key": "preferred_name",
+                    "summary": "Kuro 不喜歡被叫小黑。",
+                    "participants": [{"id": "kuro"}],
+                    "importance": 0.8,
+                    "confidence": 0.9,
+                }
+            ],
             turn("小黑就是啊"),
             KNOWN,
         )
@@ -79,16 +99,18 @@ class ExtractionRuleTests(unittest.TestCase):
 
     def test_global_scope_is_limited_to_important_decisions_or_summaries(self):
         accepted, _ = validate_operations(
-            [{
-                "action": "ADD",
-                "scope": "global",
-                "category": "user_preference",
-                "attribute_key": "drink",
-                "summary": "TestUserA表示喜歡咖啡。",
-                "participants": [{"id": "discord:test-user-001"}],
-                "importance": 0.8,
-                "confidence": 0.9,
-            }],
+            [
+                {
+                    "action": "ADD",
+                    "scope": "global",
+                    "category": "user_preference",
+                    "attribute_key": "drink",
+                    "summary": "TestUserA表示喜歡咖啡。",
+                    "participants": [{"id": "discord:test-user-001"}],
+                    "importance": 0.8,
+                    "confidence": 0.9,
+                }
+            ],
             turn("我喜歡咖啡"),
             KNOWN,
         )
@@ -96,24 +118,63 @@ class ExtractionRuleTests(unittest.TestCase):
 
     def test_accepts_explicit_group_decision(self):
         accepted, rejected = validate_operations(
-            [{
-                "action": "ADD",
-                "scope": "global",
-                "category": "decision",
-                "attribute_key": "project.ai_provider",
-                "summary": "大家決定專案改用新的 AI API。",
-                "participants": [
-                    {"id": "discord:test-user-001"},
-                    {"id": "discord:test-user-002"},
-                ],
-                "importance": 0.85,
-                "confidence": 0.95,
-            }],
+            [
+                {
+                    "action": "ADD",
+                    "scope": "global",
+                    "category": "decision",
+                    "attribute_key": "project.ai_provider",
+                    "summary": "大家決定專案改用新的 AI API。",
+                    "participants": [
+                        {"id": "discord:test-user-001"},
+                        {"id": "discord:test-user-002"},
+                    ],
+                    "importance": 0.85,
+                    "confidence": 0.95,
+                }
+            ],
             turn("我們決定專案改用新的 AI API"),
             KNOWN,
         )
         self.assertEqual(rejected, [])
         self.assertEqual(accepted[0]["scope"], "global")
+
+    def test_structured_recent_messages_are_validation_evidence(self):
+        accepted, rejected = validate_operations(
+            [
+                {
+                    "action": "ADD",
+                    "scope": "channel",
+                    "category": "plan_task",
+                    "attribute_key": "project.backup",
+                    "summary": "TestUserB 提議下週完成自動備份，TestUserA 表示同意。",
+                    "participants": [
+                        {"id": "discord:test-user-001"},
+                        {"id": "discord:test-user-002"},
+                    ],
+                    "importance": 0.7,
+                    "confidence": 0.95,
+                }
+            ],
+            turn(
+                "那就照這樣",
+                recent_messages=[
+                    {
+                        "id": "message-1",
+                        "user_id": "test-user-002",
+                        "display_name": "TestUserB",
+                        "content": "我提議下週要完成自動備份",
+                        "assistant": False,
+                        "created_at": "2026-08-18T10:00:00+08:00",
+                        "reply_to": None,
+                    }
+                ],
+            ),
+            KNOWN,
+        )
+        self.assertEqual(rejected, [])
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(accepted[0]["attribute_key"], "project.backup")
 
 
 if __name__ == "__main__":

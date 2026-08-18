@@ -253,7 +253,8 @@ async function ensureWorkerScratchChat() {
   // and cross their chat file with another file's integrity slug.
   await clearChat({ clearData: true });
   const character = characters[this_chid];
-  if (!character) throw new Error('No active character for worker scratch chat');
+  if (!character)
+    throw new Error('No active character for worker scratch chat');
   character.chat = expectedChatId;
   await getChat();
 
@@ -273,7 +274,10 @@ async function ensureWorkerScratchChat() {
  * All event listeners are registered here and removed in every exit path
  * (normal completion, user stop, error) to prevent leaks across sessions.
  */
-export async function handleUserMessage(data, { abortController = new AbortController() } = {}) {
+export async function handleUserMessage(
+  data,
+  { abortController = new AbortController() } = {},
+) {
   const latencyStartedAt = performance.now();
   const latencyLabel = String(data.requestId || 'unknown').slice(-8);
   const latencyParts = {};
@@ -536,7 +540,7 @@ export async function handleUserMessage(data, { abortController = new AbortContr
         userId: data.userId,
         mentionedUsers: data.mentionedUsers,
         contextParticipants: data.contextParticipants,
-        memoryRecentContext: data.memoryRecentContext,
+        recentMessages: data.recentMessages,
         platform: data.platform,
         displayName: data.displayName,
         userText: data.text,
@@ -554,7 +558,9 @@ export async function handleUserMessage(data, { abortController = new AbortContr
         receivedAt: data.receivedAt,
         chatId: messageState.chatId,
         text: t('reply.noResponse'),
-        metrics: metrics ? { ...metrics, status: 'error' } : { status: 'error' },
+        metrics: metrics
+          ? { ...metrics, status: 'error' }
+          : { status: 'error' },
       });
     }
 
@@ -646,21 +652,23 @@ export async function handleUserMessage(data, { abortController = new AbortContr
     const structuredHistory = Array.isArray(data.recentMessages);
     const dynamicContexts = structuredHistory
       ? buildBudgetedDynamicHistory({
-        recentMessages: data.recentMessages,
-        visionContext: data.visionContext,
-        visionObservations: data.visionObservations,
-        memoryContext: data.memoryContext,
-        dynamicContextTokenBudget: sharedState.dynamicContextTokenBudget,
-        memorySoftTokenBudget: sharedState.memorySoftTokenBudget,
-      })
+          recentMessages: data.recentMessages,
+          visionContext: data.visionContext,
+          visionObservations: data.visionObservations,
+          memoryContext: data.memoryContext,
+          memoryEntries: data.memoryEntries,
+          dynamicContextTokenBudget: sharedState.dynamicContextTokenBudget,
+          memorySoftTokenBudget: sharedState.memorySoftTokenBudget,
+        })
       : buildBudgetedDynamicContexts({
-        recentChannelContext: data.recentChannelContext,
-        visionContext: data.visionContext,
-        visionObservations: data.visionObservations,
-        memoryContext: data.memoryContext,
-        dynamicContextTokenBudget: sharedState.dynamicContextTokenBudget,
-        memorySoftTokenBudget: sharedState.memorySoftTokenBudget,
-      });
+          recentChannelContext: data.recentChannelContext,
+          visionContext: data.visionContext,
+          visionObservations: data.visionObservations,
+          memoryContext: data.memoryContext,
+          memoryEntries: data.memoryEntries,
+          dynamicContextTokenBudget: sharedState.dynamicContextTokenBudget,
+          memorySoftTokenBudget: sharedState.memorySoftTokenBudget,
+        });
     if (structuredHistory) {
       restoreDiscordPromptHistory = injectDiscordPromptHistory(
         stContext.chat,
@@ -836,7 +844,10 @@ export async function handleUserMessage(data, { abortController = new AbortContr
       await clearChat({ clearData: true });
       await saveChatConditional();
     } catch (error) {
-      console.warn('[Discord Bridge] Failed to clear worker scratch chat:', error);
+      console.warn(
+        '[Discord Bridge] Failed to clear worker scratch chat:',
+        error,
+      );
     }
     safeSend({
       type: 'generation_complete',

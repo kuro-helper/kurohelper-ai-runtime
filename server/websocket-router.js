@@ -263,7 +263,7 @@ async function handleBridgePacket(data, deps) {
             displayName: data.displayName || "",
             mentionedUsers: data.mentionedUsers || [],
             contextParticipants: data.contextParticipants || [],
-            recentContext: data.memoryRecentContext || "",
+            recentMessages: data.recentMessages || [],
             userText: data.userText,
             assistantText: delivered.join("\n\n"),
           }),

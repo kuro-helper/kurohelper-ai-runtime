@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
 MEMORY_CATEGORIES = {
     "conversation_event",
     "user_preference",
@@ -83,6 +82,26 @@ def _clean(value: Any, limit: int) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
 
 
+def _recent_messages_evidence(value: Any, limit: int = 8000) -> str:
+    if not isinstance(value, list):
+        return ""
+    parts: list[str] = []
+    for message in value[-20:]:
+        if not isinstance(message, dict):
+            continue
+        display_name = _clean(message.get("display_name"), 100)
+        content = _clean(message.get("content"), 1500)
+        if display_name or content:
+            parts.append(f"{display_name}: {content}".strip())
+        reply = message.get("reply_to")
+        if isinstance(reply, dict):
+            reply_name = _clean(reply.get("display_name"), 100)
+            reply_content = _clean(reply.get("content"), 300)
+            if reply_name or reply_content:
+                parts.append(f"回覆 {reply_name}: {reply_content}".strip())
+    return _clean("\n".join(parts), limit)
+
+
 def _is_question_only(text: str) -> bool:
     cleaned = _clean(text, 8000)
     if not cleaned:
@@ -136,7 +155,11 @@ def _resolve_participants(
         raw_id = _clean(raw.get("id") or raw.get("participant_id"), 120)
         raw_name = _clean(raw.get("display_name") or raw.get("name"), 100)
         participant = by_id.get(raw_id) or by_name.get(raw_name.casefold())
-        if participant is None and raw_name and raw_name.casefold() in evidence.casefold():
+        if (
+            participant is None
+            and raw_name
+            and raw_name.casefold() in evidence.casefold()
+        ):
             participant = {
                 "id": f"name:{raw_name.casefold()}"[:120],
                 "display_name": raw_name,
@@ -169,7 +192,9 @@ def validate_operations(
     accepted: list[dict[str, Any]] = []
     rejected: list[str] = []
     user_text = _clean(turn.get("user_text"), 8000)
-    recent_context = _clean(turn.get("recent_context"), 8000)
+    recent_context = _recent_messages_evidence(turn.get("recent_messages"))
+    if not recent_context:
+        recent_context = _clean(turn.get("recent_context"), 8000)
     evidence = f"{recent_context}\n{user_text}".strip()
     current_id = f"discord:{_clean(turn.get('user_id'), 100)}"
     by_id, _ = _participant_lookup(known_participants)

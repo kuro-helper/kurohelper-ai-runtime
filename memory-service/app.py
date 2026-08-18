@@ -25,7 +25,6 @@ from memory_candidates import (
 )
 from memory_store import MemoryStore, make_namespace
 
-
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s [memory] %(levelname)s %(message)s",
@@ -38,10 +37,14 @@ EMBEDDING_MODEL = os.getenv(
     "BAAI/bge-small-zh-v1.5",
 )
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
-OPENROUTER_BASE_URL = os.getenv(
-    "OPENROUTER_BASE_URL",
-    "https://openrouter.ai/api/v1",
-).strip().rstrip("/")
+OPENROUTER_BASE_URL = (
+    os.getenv(
+        "OPENROUTER_BASE_URL",
+        "https://openrouter.ai/api/v1",
+    )
+    .strip()
+    .rstrip("/")
+)
 OPENROUTER_MODEL = os.getenv(
     "MEMORY_EXTRACTION_MODEL",
     os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash"),
@@ -55,7 +58,10 @@ TRASH_RETENTION_DAYS = max(
     min(3650, int(os.getenv("MEMORY_TRASH_RETENTION_DAYS", "30"))),
 )
 BACKUP_ENABLED = os.getenv("MEMORY_BACKUP_ENABLED", "true").strip().lower() not in {
-    "0", "false", "no", "off",
+    "0",
+    "false",
+    "no",
+    "off",
 }
 BACKUP_INTERVAL_SECONDS = max(
     900,
@@ -85,6 +91,26 @@ class ContextParticipant(BaseModel):
     display_name: str = Field(default="", max_length=100)
 
 
+class ReplyReference(BaseModel):
+    message_id: str = Field(default="", max_length=100)
+    user_id: str = Field(default="", max_length=100)
+    display_name: str = Field(default="", max_length=100)
+    content: str = Field(default="", max_length=300)
+    assistant: bool = False
+    image_count: int = Field(default=0, ge=0, le=10)
+    unavailable: bool = False
+
+
+class RecentMessage(BaseModel):
+    id: str = Field(min_length=1, max_length=100)
+    user_id: str = Field(default="", max_length=100)
+    display_name: str = Field(default="", max_length=100)
+    content: str = Field(default="", max_length=1500)
+    assistant: bool = False
+    created_at: str = Field(default="", max_length=100)
+    reply_to: ReplyReference | None = None
+
+
 class TurnRequest(BaseModel):
     request_id: str = Field(default="", max_length=100)
     character_id: str = Field(min_length=1, max_length=80)
@@ -92,7 +118,11 @@ class TurnRequest(BaseModel):
     channel_id: str = Field(default="", max_length=100)
     display_name: str = Field(default="", max_length=100)
     mentioned_users: list[MentionedUser] = Field(default_factory=list, max_length=25)
-    context_participants: list[ContextParticipant] = Field(default_factory=list, max_length=25)
+    context_participants: list[ContextParticipant] = Field(
+        default_factory=list, max_length=25
+    )
+    recent_messages: list[RecentMessage] = Field(default_factory=list, max_length=20)
+    # Temporary compatibility for older Runtime instances during rolling deploys.
     recent_context: str = Field(default="", max_length=8000)
     user_text: str = Field(min_length=1, max_length=8000)
     assistant_text: str = Field(min_length=1, max_length=12000)
@@ -259,13 +289,7 @@ def _store() -> MemoryStore:
 
 
 def _safe_memory_text(value: str) -> str:
-    return (
-        str(value)
-        .replace("<", "＜")
-        .replace(">", "＞")
-        .replace("\x00", "")
-        .strip()
-    )
+    return str(value).replace("<", "＜").replace(">", "＞").replace("\x00", "").strip()
 
 
 def _format_context(memories: list[dict[str, Any]]) -> str:
@@ -287,7 +311,9 @@ def _format_context(memories: list[dict[str, Any]]) -> str:
         ]
         participant_text = "、".join(dict.fromkeys(names)) or "未標記"
         scope_label = "跨頻道" if memory.get("scope_type") == "global" else "本頻道"
-        lines.append(f"- [{label}｜{scope_label}｜參與者：{participant_text}] {summary}")
+        lines.append(
+            f"- [{label}｜{scope_label}｜參與者：{participant_text}] {summary}"
+        )
     lines.append("</long_term_memory>")
     return "\n".join(lines)
 
@@ -444,11 +470,13 @@ async def forget_managed_memory(request: MemoryIdRequest) -> dict[str, Any]:
         request.memory_id,
     )
     if result.get("memory"):
-        result["memory"] = _management_memory({
-            **result["memory"],
-            "status": "deleted",
-            "updated_at": result.get("deleted_at", result["memory"]["updated_at"]),
-        })
+        result["memory"] = _management_memory(
+            {
+                **result["memory"],
+                "status": "deleted",
+                "updated_at": result.get("deleted_at", result["memory"]["updated_at"]),
+            }
+        )
     result["trash_retention_days"] = TRASH_RETENTION_DAYS
     return result
 
@@ -573,7 +601,9 @@ def _memory_extraction_metrics(
     metadata = payload.get("openrouter_metadata")
     if not isinstance(metadata, dict):
         metadata = {}
-    attempts = metadata.get("attempts") if isinstance(metadata.get("attempts"), list) else []
+    attempts = (
+        metadata.get("attempts") if isinstance(metadata.get("attempts"), list) else []
+    )
     successful_attempt = next(
         (
             attempt
@@ -609,9 +639,7 @@ def _memory_extraction_metrics(
             or ""
         ),
         "providerModel": str(
-            selected_endpoint.get("model")
-            or successful_attempt.get("model")
-            or ""
+            selected_endpoint.get("model") or successful_attempt.get("model") or ""
         ),
         "routingStrategy": str(metadata.get("strategy") or ""),
         "routingRegion": str(metadata.get("region") or ""),
@@ -757,7 +785,9 @@ async def _extract_and_apply(turn: dict[str, Any]) -> dict[str, Any]:
             ),
         }
     except Exception:
-        logger.exception("Memory extraction failed for request %s", turn.get("request_id", ""))
+        logger.exception(
+            "Memory extraction failed for request %s", turn.get("request_id", "")
+        )
         duration_ms = round((time.perf_counter() - started_at) * 1000)
         return {
             "status": "failed",

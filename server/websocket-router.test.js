@@ -122,8 +122,7 @@ test("handleBridgePacket stream_end falls back sendText for non-streaming fronte
   );
   assert.ok(
     deps.__calls.some(
-      (c) =>
-        c[0] === "telegram" && c[1] === "sendText" && c[3] === "done",
+      (c) => c[0] === "telegram" && c[1] === "sendText" && c[3] === "done",
     ),
   );
 });
@@ -194,7 +193,9 @@ test("handleBridgePacket completes marker-only ai_reply with a retry message", a
 
   const sends = deps.__calls.filter((c) => c[1] === "sendText");
   assert.equal(sends.length, 2);
-  assert.ok(sends.every((call) => call[3] === "模型沒有產生可用的回覆，請再試一次。"));
+  assert.ok(
+    sends.every((call) => call[3] === "模型沒有產生可用的回覆，請再試一次。"),
+  );
 });
 
 test("handleBridgePacket resolves raw reply cache responses without a chat id", async () => {
@@ -255,7 +256,15 @@ test("handleBridgePacket submits a completed turn to long-term memory", async ()
       displayName: "TestUserA",
       mentionedUsers: [{ id: "discord-user-2", displayName: "Tommy" }],
       contextParticipants: [{ id: "discord-user-3", displayName: "TestUserB" }],
-      memoryRecentContext: "[TestUserB] 大家星期六有空嗎？",
+      recentMessages: [
+        {
+          id: "message-1",
+          userId: "discord-user-3",
+          displayName: "TestUserB",
+          content: "大家星期六有空嗎？",
+          assistant: false,
+        },
+      ],
       userText: "我喜歡咖啡",
       messages: [{ name: "", text: "……記住了。" }],
     },
@@ -270,7 +279,15 @@ test("handleBridgePacket submits a completed turn to long-term memory", async ()
   assert.deepEqual(turns[0].contextParticipants, [
     { id: "discord-user-3", displayName: "TestUserB" },
   ]);
-  assert.equal(turns[0].recentContext, "[TestUserB] 大家星期六有空嗎？");
+  assert.deepEqual(turns[0].recentMessages, [
+    {
+      id: "message-1",
+      userId: "discord-user-3",
+      displayName: "TestUserB",
+      content: "大家星期六有空嗎？",
+      assistant: false,
+    },
+  ]);
   assert.equal(turns[0].assistantText, "……記住了。");
   await new Promise((resolve) => setImmediate(resolve));
   const metricSends = deps.__calls.filter((call) => call[1] === "sendMetric");
@@ -541,10 +558,7 @@ test("handleBridgePacket messages_deleted defaults count to 1 when missing", asy
     return [];
   };
 
-  await handleBridgePacket(
-    { type: "messages_deleted", chatId: "conv1" },
-    deps,
-  );
+  await handleBridgePacket({ type: "messages_deleted", chatId: "conv1" }, deps);
 
   assert.deepEqual(seen, [["deleteRoleplayMessages", 1, "any"]]);
 });
@@ -558,7 +572,12 @@ test("handleBridgePacket messages_deleted forwards ai_only mode", async () => {
   };
 
   await handleBridgePacket(
-    { type: "messages_deleted", chatId: "conv1", count: 1, deleteMode: "ai_only" },
+    {
+      type: "messages_deleted",
+      chatId: "conv1",
+      count: 1,
+      deleteMode: "ai_only",
+    },
     deps,
   );
 

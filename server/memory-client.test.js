@@ -13,7 +13,27 @@ test("recall returns scoped context from memory service", async () => {
       requestBody = JSON.parse(options.body);
       return {
         ok: true,
-        json: async () => ({ context: "remembered", memories: [{ id: "1" }] }),
+        json: async () => ({
+          context: "remembered",
+          memories: [
+            {
+              id: "memory-1",
+              key: "drink.tea",
+              summary: "TestUserA 喜歡無糖紅茶。",
+              category: "user_preference",
+              scope: "channel",
+              scope_id: "c1",
+              participants: [
+                {
+                  id: "discord:u1",
+                  display_name: "TestUserA",
+                  role: "speaker",
+                },
+              ],
+              score: 0.91,
+            },
+          ],
+        }),
       };
     },
   });
@@ -28,6 +48,24 @@ test("recall returns scoped context from memory service", async () => {
   assert.equal(requestBody.character_id, "Kuro");
   assert.equal(requestBody.channel_id, "discord:c1");
   assert.deepEqual(requestBody.participant_ids, ["u1", "u2"]);
+  assert.deepEqual(result.memories, [
+    {
+      id: "memory-1",
+      key: "drink.tea",
+      summary: "TestUserA 喜歡無糖紅茶。",
+      category: "user_preference",
+      scope: "channel",
+      scopeId: "c1",
+      participants: [
+        {
+          id: "discord:u1",
+          displayName: "TestUserA",
+          role: "speaker",
+        },
+      ],
+      score: 0.91,
+    },
+  ]);
 });
 
 test("recall fails open when service is unavailable", async () => {
@@ -79,7 +117,25 @@ test("rememberTurn submits extraction after generation", async () => {
       { id: "u1", displayName: "TestUserA" },
       { id: "u3", displayName: "TestUserB" },
     ],
-    recentContext: "[TestUserB] 大家星期六要玩遊戲嗎？",
+    recentMessages: [
+      {
+        id: "message-1",
+        userId: "u3",
+        displayName: "TestUserB",
+        content: "大家星期六要玩遊戲嗎？",
+        assistant: false,
+        createdAt: "2026-08-18T10:00:00+08:00",
+        replyTo: {
+          messageId: "message-0",
+          userId: "u1",
+          displayName: "TestUserA",
+          content: "星期六有空。",
+          assistant: false,
+          imageCount: 1,
+          unavailable: false,
+        },
+      },
+    ],
     userText: "我喜歡咖啡",
     assistantText: "……記住了。",
   });
@@ -93,7 +149,26 @@ test("rememberTurn submits extraction after generation", async () => {
     { id: "u1", display_name: "TestUserA" },
     { id: "u3", display_name: "TestUserB" },
   ]);
-  assert.equal(requestBody.recent_context, "[TestUserB] 大家星期六要玩遊戲嗎？");
+  assert.equal(requestBody.recent_context, undefined);
+  assert.deepEqual(requestBody.recent_messages, [
+    {
+      id: "message-1",
+      user_id: "u3",
+      display_name: "TestUserB",
+      content: "大家星期六要玩遊戲嗎？",
+      assistant: false,
+      created_at: "2026-08-18T10:00:00+08:00",
+      reply_to: {
+        message_id: "message-0",
+        user_id: "u1",
+        display_name: "TestUserA",
+        content: "星期六有空。",
+        assistant: false,
+        image_count: 1,
+        unavailable: false,
+      },
+    },
+  ]);
 });
 
 test("memory management uses the shared character scope", async () => {
@@ -123,7 +198,18 @@ test("memory management uses the shared character scope", async () => {
 
   assert.deepEqual(
     requests.map((request) => request.url.split("/").at(-1)),
-    ["list", "list", "get", "forget", "restore", "resolve", "clear", "backups", "backup", "restore-backup"],
+    [
+      "list",
+      "list",
+      "get",
+      "forget",
+      "restore",
+      "resolve",
+      "clear",
+      "backups",
+      "backup",
+      "restore-backup",
+    ],
   );
   assert.ok(requests.every((request) => request.body.character_id === "Kuro"));
   assert.equal(requests[0].body.status, "deleted");
@@ -139,7 +225,13 @@ test("memory management uses the shared character scope", async () => {
 });
 
 function turn(channelId, requestId) {
-  return { requestId, userId: "u1", channelId, userText: `user-${requestId}`, assistantText: `assistant-${requestId}` };
+  return {
+    requestId,
+    userId: "u1",
+    channelId,
+    userText: `user-${requestId}`,
+    assistantText: `assistant-${requestId}`,
+  };
 }
 
 test("same-channel memory writes are FIFO while different channels overlap", async () => {
@@ -173,10 +265,15 @@ test("recall does not wait for a pending same-channel write", async () => {
     fetchImpl: async (url) => {
       calls.push(url);
       if (url.endsWith("/v1/turns")) {
-        await new Promise((resolve) => { releaseWrite = resolve; });
+        await new Promise((resolve) => {
+          releaseWrite = resolve;
+        });
         return { ok: true, json: async () => ({ status: "completed" }) };
       }
-      return { ok: true, json: async () => ({ context: "fresh", memories: [] }) };
+      return {
+        ok: true,
+        json: async () => ({ context: "fresh", memories: [] }),
+      };
     },
   });
   const write = client.rememberTurn(turn("c1", "1"));
