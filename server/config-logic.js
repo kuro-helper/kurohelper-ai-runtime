@@ -32,8 +32,10 @@ function createConfig(rawConfig) {
     imagePlaceholderTimeoutSeconds: 180,
     dynamicContextTokenBudget: 1200,
     memorySoftTokenBudget: 400,
+    debug: false,
     streamResponses: false,
     dialogueOnlyResponses: false,
+    autoCreatePersonas: true,
     ...rawConfig,
   };
 
@@ -93,6 +95,11 @@ function createConfig(rawConfig) {
   if (typeof config.dialogueOnlyResponses !== "boolean") {
     throw new Error("config.dialogueOnlyResponses must be true or false.");
   }
+  for (const key of ["debug", "streamResponses", "autoCreatePersonas"]) {
+    if (typeof config[key] !== "boolean") {
+      throw new Error(`config.${key} must be true or false.`);
+    }
+  }
   if (config.dialogueOnlyResponses && config.streamResponses) {
     throw new Error(
       "config.dialogueOnlyResponses requires streamResponses: false.",
@@ -116,6 +123,11 @@ function createConfig(rawConfig) {
   for (const [platform, pluginCfg] of Object.entries(config.plugins || {})) {
     const breaker = pluginCfg?.circuitBreaker;
     if (!breaker) continue;
+    if (typeof breaker.enabled !== "boolean") {
+      throw new Error(
+        `config.plugins.${platform}.circuitBreaker.enabled must be true or false.`,
+      );
+    }
     if (
       !Number.isFinite(breaker.failureThreshold) ||
       breaker.failureThreshold <= 0

@@ -666,6 +666,11 @@ export async function handleUserMessage(data, { abortController = new AbortContr
         stContext.chat,
         dynamicContexts.recentMessages,
         dynamicContexts.currentImageContext,
+        {
+          timeZone: sharedState.bridgeTimezone,
+          locale: sharedState.bridgeLocale,
+          currentReplyTo: data.replyTo,
+        },
       );
     } else {
       restoreDiscordPromptHistory = injectDiscordPromptHistory(

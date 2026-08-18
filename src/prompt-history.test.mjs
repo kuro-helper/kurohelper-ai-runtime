@@ -62,3 +62,96 @@ test('injects Discord history as user and assistant turns then restores chat', (
   assert.deepEqual(chat, [current]);
   assert.equal(current.mes, '小黑 早上好');
 });
+
+test('renders Discord history timestamps in the configured timezone', () => {
+  const chat = [{ is_user: true, mes: 'current question' }];
+  const restore = injectDiscordPromptHistory(
+    chat,
+    [
+      {
+        id: '1',
+        displayName: 'Alice',
+        content: 'older question',
+        assistant: false,
+        createdAt: '2026-08-05T15:03:14.431Z',
+      },
+      {
+        id: '2',
+        displayName: 'Kuro',
+        content: 'older answer',
+        assistant: true,
+        createdAt: '2026-08-05T15:03:18.623Z',
+      },
+    ],
+    '',
+    { timeZone: 'Asia/Taipei', locale: 'zh-TW' },
+  );
+
+  assert.equal(
+    chat[0].mes,
+    '[近期脈絡]\n[2026-08-05 23:03][Alice] older question',
+  );
+  assert.equal(chat[1].mes, '[2026-08-05 23:03] older answer');
+  restore();
+});
+
+test('removes stage directions from assistant history without changing user messages', () => {
+  const chat = [{ is_user: true, mes: 'current question' }];
+  const restore = injectDiscordPromptHistory(chat, [
+    {
+      id: '1',
+      displayName: 'Alice',
+      content: '（小聲）這是使用者原本輸入的括號。',
+      assistant: false,
+    },
+    {
+      id: '2',
+      displayName: 'Kuro',
+      content: '（耳朵輕輕抖了一下）\n……嗯。我在。\n*尾巴晃了晃*',
+      assistant: true,
+    },
+  ]);
+
+  assert.match(chat[0].mes, /（小聲）/);
+  assert.equal(chat[1].mes, '……嗯。我在。');
+  restore();
+});
+
+test('renders recent and current Discord reply relationships without leaking Kuro stage directions', () => {
+  const chat = [{ is_user: true, mes: '現在早上了啦' }];
+  const restore = injectDiscordPromptHistory(chat, [
+    {
+      displayName: '肉圓',
+      content: '你怎麼還沒睡',
+      assistant: false,
+      replyTo: {
+        displayName: 'Kuro',
+        content: '（耳朵抖了一下）\n……夜貓子。',
+        assistant: true,
+      },
+    },
+    {
+      displayName: 'Kuro',
+      content: '……因為，我還醒著。',
+      assistant: true,
+      replyTo: { unavailable: true },
+    },
+  ], '', {
+    currentReplyTo: {
+      displayName: 'Kuro',
+      content: '*尾巴晃了晃*\n……嗯，我在。',
+      assistant: true,
+    },
+  });
+
+  assert.equal(
+    chat[0].mes,
+    '[近期脈絡]\n[肉圓｜回覆 Kuro 的「……夜貓子。」] 你怎麼還沒睡',
+  );
+  assert.equal(chat[1].mes, '[回覆一則已無法取得的訊息] ……因為，我還醒著。');
+  assert.equal(
+    chat[2].mes,
+    '[本次訊息｜回覆 Kuro 的「……嗯，我在。」]\n\n現在早上了啦',
+  );
+  restore();
+});

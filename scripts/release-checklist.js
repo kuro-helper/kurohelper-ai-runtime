@@ -15,7 +15,8 @@ function run(command, args, cwd = process.cwd()) {
   const result = spawnSync(command, args, {
     stdio: "inherit",
     cwd,
-    shell: false,
+    // npm is a .cmd shim on Windows and requires command-shell resolution.
+    shell: process.platform === "win32",
   });
   return result.status === 0;
 }

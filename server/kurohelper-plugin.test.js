@@ -108,6 +108,13 @@ test("KuroHelper transport returns generation metrics with the final reply", asy
         channelId: "channel-1",
         userId: "user-1",
         text: "hello",
+        replyTo: {
+          messageId: "target-current",
+          userId: "bot-user",
+          displayName: "Kuro",
+          content: "  （小聲） earlier bot answer  ",
+          assistant: true,
+        },
         recentMessages: [{
           id: "recent-1",
           userId: "user-2",
@@ -115,6 +122,12 @@ test("KuroHelper transport returns generation metrics with the final reply", asy
           content: "earlier question",
           assistant: false,
           createdAt: "2026-08-01T01:00:00Z",
+          replyTo: {
+            messageId: "target-recent",
+            userId: "user-3",
+            displayName: " Alice ",
+            content: " original\n question ",
+          },
         }],
         images: [{
           id: "image-1",
@@ -133,6 +146,24 @@ test("KuroHelper transport returns generation metrics with the final reply", asy
     await dispatchedPromise;
     assert.equal(receivedMetadata.recentMessages.length, 1);
     assert.equal(receivedMetadata.recentMessages[0].displayName, "Bob");
+    assert.deepEqual(receivedMetadata.recentMessages[0].replyTo, {
+      messageId: "target-recent",
+      userId: "user-3",
+      displayName: "Alice",
+      content: "original question",
+      assistant: false,
+      imageCount: 0,
+      unavailable: false,
+    });
+    assert.deepEqual(receivedMetadata.replyTo, {
+      messageId: "target-current",
+      userId: "bot-user",
+      displayName: "Kuro",
+      content: "（小聲） earlier bot answer",
+      assistant: true,
+      imageCount: 0,
+      unavailable: false,
+    });
     assert.deepEqual(receivedMetadata.images, [{
       id: "image-1",
       url: "https://cdn.discordapp.com/attachments/a/b/image.png",

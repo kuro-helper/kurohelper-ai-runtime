@@ -3,6 +3,9 @@
  * The newest user message remains visible; Discord supplies recent context.
  */
 
+import { formatDialogueOnly } from './dialogue-only.mjs';
+import { formatDiscordReplyLabel } from './discord-reply.mjs';
+
 export function suppressPreviousChatMessages(
   chat,
   ignoreSymbol = Symbol.for('ignore'),
@@ -52,6 +55,7 @@ export function injectDiscordPromptHistory(
   chat,
   recentMessages = [],
   currentImageContext = '',
+  { timeZone = 'Asia/Taipei', locale = 'zh-TW', currentReplyTo = null } = {},
 ) {
   if (!Array.isArray(chat) || chat.length === 0 || !chat.at(-1)?.is_user) {
     return () => {};
@@ -65,13 +69,32 @@ export function injectDiscordPromptHistory(
       const displayName = String(
         message?.displayName || (assistant ? 'Kuro' : 'Discord 使用者'),
       ).trim();
-      const content = String(message?.content || '').trim();
+      const rawContent = String(message?.content || '').trim();
+      // Discord retains the text that was actually sent. Clean assistant
+      // turns only while constructing the prompt so an old stage direction
+      // cannot become a style example for subsequent generations.
+      const content = assistant
+        ? formatDialogueOnly(rawContent)
+        : rawContent;
       if (!content) return null;
+      const timestamp = formatDiscordHistoryTimestamp(
+        message?.createdAt,
+        timeZone,
+        locale,
+      );
+      const timestampPrefix = timestamp ? `[${timestamp}]` : '';
+      const replyLabel = formatDiscordReplyLabel(message?.replyTo);
+      const speakerLabel = replyLabel
+        ? `[${displayName}｜${replyLabel}]`
+        : `[${displayName}]`;
       return {
         name: displayName,
         is_user: !assistant,
         is_system: false,
-        mes: assistant ? content : `[${displayName}] ${content}`,
+        mes: assistant
+          ? [timestampPrefix, replyLabel ? `[${replyLabel}]` : '', content]
+            .filter(Boolean).join(' ')
+          : `${timestampPrefix}${speakerLabel} ${content}`,
         send_date: message?.createdAt || Date.now(),
         extra: { discord_prompt_history: true },
       };
@@ -86,8 +109,9 @@ export function injectDiscordPromptHistory(
     chat.splice(chat.length - 1, 0, ...injected);
   }
   const attachmentContext = String(currentImageContext || '').trim();
+  const currentReplyLabel = formatDiscordReplyLabel(currentReplyTo);
   currentMessage.mes = [
-    '[本次訊息]',
+    currentReplyLabel ? `[本次訊息｜${currentReplyLabel}]` : '[本次訊息]',
     String(originalCurrentText || '').trim(),
     attachmentContext,
   ].filter(Boolean).join('\n\n');
@@ -102,4 +126,30 @@ export function injectDiscordPromptHistory(
       if (index >= 0) chat.splice(index, 1);
     }
   };
+}
+
+function formatDiscordHistoryTimestamp(value, timeZone, locale) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  try {
+    const parts = new Intl.DateTimeFormat(locale || 'zh-TW', {
+      timeZone: timeZone || 'Asia/Taipei',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(date);
+    const values = Object.fromEntries(
+      parts
+        .filter((part) => part.type !== 'literal')
+        .map((part) => [part.type, part.value]),
+    );
+    return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}`;
+  } catch {
+    return date.toISOString().slice(0, 16).replace('T', ' ');
+  }
 }

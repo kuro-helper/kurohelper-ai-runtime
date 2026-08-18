@@ -180,6 +180,139 @@ class MemoryStoreTests(unittest.TestCase):
         self.assertEqual(len(memories), 1)
         self.assertEqual(memories[0]["memory_value"], "Use the new provider")
 
+    def test_contradicting_preference_becomes_pending_and_accumulates_evidence(self):
+        original = self.preference(
+            "discord:u1", "Tommy", "Tommy喜歡紅豆冰棒。"
+        )
+        changed = self.preference(
+            "discord:u1", "Tommy", "Tommy現在不再喜歡紅豆冰棒。"
+        )
+        self.store.apply_operations(
+            "Kuro", [original], request_id="evidence-1", channel_id="channel-1"
+        )
+        first_conflict = self.store.apply_operations(
+            "Kuro", [changed], request_id="evidence-2", channel_id="channel-1"
+        )
+
+        self.assertEqual(first_conflict["pending"], 1)
+        self.assertEqual(len(self.store.list_memories("Kuro", "active")), 1)
+        pending = self.store.list_memories("Kuro", "pending")
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["conflict_type"], "contradiction")
+        self.assertEqual(pending[0]["evidence_count"], 1)
+        self.assertEqual(len(FakeClient.collection.items), 1)
+
+        repeated = self.store.apply_operations(
+            "Kuro", [changed], request_id="evidence-3", channel_id="channel-1"
+        )
+        pending = self.store.list_memories("Kuro", "pending")
+        self.assertEqual(repeated["noop"], 1)
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["evidence_count"], 2)
+        self.assertEqual(
+            pending[0]["evidence_sources"], ["evidence-2", "evidence-3"]
+        )
+
+    def test_semantic_scan_catches_conflict_when_attribute_key_changes(self):
+        original = self.preference(
+            "discord:u1", "Tommy", "Tommy喜歡喝綠茶。"
+        )
+        original["attribute_key"] = "drink.tea.preference"
+        changed = self.preference(
+            "discord:u1", "Tommy", "Tommy現在不再喝綠茶。"
+        )
+        changed["attribute_key"] = "beverage.green_tea.current_habit"
+        self.store.apply_operations(
+            "Kuro", [original], request_id="semantic-1", channel_id="channel-1"
+        )
+
+        result = self.store.apply_operations(
+            "Kuro", [changed], request_id="semantic-2", channel_id="channel-1"
+        )
+
+        self.assertEqual(result["pending"], 1)
+        pending = self.store.list_memories("Kuro", "pending")
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(
+            pending[0]["conflict_memory_id"],
+            self.store.list_memories("Kuro", "active")[0]["id"],
+        )
+
+    def test_semantic_duplicate_with_different_key_is_not_added_twice(self):
+        first = self.preference(
+            "discord:u1", "Tommy", "Tommy喜歡喝綠茶。"
+        )
+        second = {**first, "attribute_key": "beverage.green_tea.preference"}
+        self.store.apply_operations(
+            "Kuro", [first], request_id="duplicate-1", channel_id="channel-1"
+        )
+
+        result = self.store.apply_operations(
+            "Kuro", [second], request_id="duplicate-2", channel_id="channel-1"
+        )
+
+        self.assertEqual(result["noop"], 1)
+        self.assertEqual(len(self.store.list_memories("Kuro", "active")), 1)
+
+    def test_resolve_pending_can_keep_new_memory(self):
+        self.store.apply_operations(
+            "Kuro",
+            [self.preference("discord:u1", "Tommy", "Tommy喜歡紅豆冰棒。")],
+            request_id="resolve-1",
+            channel_id="channel-1",
+        )
+        self.store.apply_operations(
+            "Kuro",
+            [self.preference("discord:u1", "Tommy", "Tommy不再喜歡紅豆冰棒。")],
+            request_id="resolve-2",
+            channel_id="channel-1",
+        )
+        pending = self.store.list_memories("Kuro", "pending")[0]
+
+        resolved = self.store.resolve_pending("Kuro", pending["id"][:8], "keep_new")
+
+        self.assertEqual(resolved["status"], "resolved")
+        self.assertEqual(resolved["resolution"], "keep_new")
+        active = self.store.list_memories("Kuro", "active")
+        self.assertEqual(len(active), 1)
+        self.assertIn("不再喜歡", active[0]["memory_value"])
+        self.assertEqual(len(self.store.list_memories("Kuro", "pending")), 0)
+        self.assertEqual(len(self.store.list_memories("Kuro", "superseded")), 1)
+        self.assertEqual(set(FakeClient.collection.items), {active[0]["id"]})
+
+    def test_resolve_pending_can_keep_old_or_allow_coexistence(self):
+        def create_conflict(suffix):
+            participant = f"discord:{suffix}"
+            self.store.apply_operations(
+                "Kuro",
+                [self.preference(participant, suffix, f"{suffix}喜歡紅豆冰棒。")],
+                request_id=f"{suffix}-1",
+                channel_id="channel-1",
+            )
+            self.store.apply_operations(
+                "Kuro",
+                [self.preference(participant, suffix, f"{suffix}不再喜歡紅豆冰棒。")],
+                request_id=f"{suffix}-2",
+                channel_id="channel-1",
+            )
+            return next(
+                item for item in self.store.list_memories("Kuro", "pending")
+                if item["participants"][0]["id"] == participant
+            )
+
+        keep_old = create_conflict("u1")
+        old_result = self.store.resolve_pending("Kuro", keep_old["id"], "keep_old")
+        self.assertEqual(old_result["resolution"], "keep_old")
+
+        coexist = create_conflict("u2")
+        coexist_result = self.store.resolve_pending("Kuro", coexist["id"], "coexist")
+        self.assertEqual(coexist_result["resolution"], "coexist")
+        u2_active = [
+            item for item in self.store.list_memories("Kuro", "active")
+            if item["participants"][0]["id"] == "discord:u2"
+        ]
+        self.assertEqual(len(u2_active), 2)
+
     def test_store_rejects_new_legacy_person_profile_categories(self):
         result = self.store.apply_operations(
             "Kuro",

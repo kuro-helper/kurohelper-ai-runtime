@@ -8,6 +8,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from difflib import SequenceMatcher
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -36,6 +37,23 @@ LEGACY_CATEGORY_MAP = {
 
 BACKUP_ID_PATTERN = re.compile(
     r"^(?P<timestamp>\d{8}T\d{6}Z)-(?P<reason>auto|manual|startup|pre-restore)-(?P<suffix>[0-9a-f]{8})$"
+)
+
+STABLE_CONFLICT_CATEGORIES = {
+    "user_preference",
+    "plan_task",
+    "relationship_milestone",
+    "decision",
+}
+NEGATIVE_CLAIM_PATTERN = re.compile(
+    r"(?:不再|不會再|不喜歡|討厭|停止|取消|放棄|不要|不喝|不吃|沒有|不是|"
+    r"no longer|dislike|hate|stopped|cancelled|canceled|not\b)",
+    re.IGNORECASE,
+)
+POSITIVE_CLAIM_PATTERN = re.compile(
+    r"(?:喜歡|偏好|愛|會繼續|決定|採用|選擇|要|喝|吃|"
+    r"like|love|prefer|decided|adopted|will\b)",
+    re.IGNORECASE,
 )
 
 
@@ -345,7 +363,13 @@ class MemoryStore:
                 scope_type TEXT NOT NULL DEFAULT 'channel',
                 scope_id TEXT NOT NULL DEFAULT '',
                 participants_json TEXT NOT NULL DEFAULT '[]',
-                identity_key TEXT NOT NULL DEFAULT ''
+                identity_key TEXT NOT NULL DEFAULT '',
+                conflict_memory_id TEXT NOT NULL DEFAULT '',
+                conflict_type TEXT NOT NULL DEFAULT '',
+                conflict_similarity REAL NOT NULL DEFAULT 0,
+                evidence_count INTEGER NOT NULL DEFAULT 1,
+                evidence_sources_json TEXT NOT NULL DEFAULT '[]',
+                resolution_note TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_memories_namespace_status
                 ON memories(namespace, status);
@@ -381,6 +405,19 @@ class MemoryStore:
             self._db.execute(
                 "ALTER TABLE memories ADD COLUMN identity_key TEXT NOT NULL DEFAULT ''"
             )
+        migrations = {
+            "conflict_memory_id": "TEXT NOT NULL DEFAULT ''",
+            "conflict_type": "TEXT NOT NULL DEFAULT ''",
+            "conflict_similarity": "REAL NOT NULL DEFAULT 0",
+            "evidence_count": "INTEGER NOT NULL DEFAULT 1",
+            "evidence_sources_json": "TEXT NOT NULL DEFAULT '[]'",
+            "resolution_note": "TEXT NOT NULL DEFAULT ''",
+        }
+        for column, definition in migrations.items():
+            if column not in columns:
+                self._db.execute(
+                    f"ALTER TABLE memories ADD COLUMN {column} {definition}"
+                )
         self._db.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_memories_subject_key
@@ -424,6 +461,13 @@ class MemoryStore:
         except (TypeError, json.JSONDecodeError):
             participants = []
         result["participants"] = participants if isinstance(participants, list) else []
+        try:
+            evidence_sources = json.loads(result.get("evidence_sources_json") or "[]")
+        except (TypeError, json.JSONDecodeError):
+            evidence_sources = []
+        result["evidence_sources"] = (
+            evidence_sources if isinstance(evidence_sources, list) else []
+        )
         return result
 
     @staticmethod
@@ -653,7 +697,7 @@ class MemoryStore:
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         namespace = make_namespace(character_id)
-        allowed_statuses = {"active", "deleted", "forgotten", "superseded"}
+        allowed_statuses = {"active", "pending", "deleted", "forgotten", "superseded"}
         selected_status = status if status in allowed_statuses else "active"
         with self._lock:
             rows = self._db.execute(
@@ -674,7 +718,7 @@ class MemoryStore:
 
     def count_memories(self, character_id: str, status: str = "active") -> int:
         namespace = make_namespace(character_id)
-        allowed_statuses = {"active", "deleted", "forgotten", "superseded"}
+        allowed_statuses = {"active", "pending", "deleted", "forgotten", "superseded"}
         selected_status = status if status in allowed_statuses else "active"
         with self._lock:
             row = self._db.execute(
@@ -790,6 +834,93 @@ class MemoryStore:
             restored["updated_at"] = now
             restored["status"] = "active"
             return {"status": "restored", "memory": restored}
+
+    def resolve_pending(
+        self,
+        character_id: str,
+        memory_id: str,
+        resolution: str,
+    ) -> dict[str, Any]:
+        namespace = make_namespace(character_id)
+        selected_resolution = str(resolution or "").strip().lower().replace("-", "_")
+        if selected_resolution not in {"keep_new", "keep_old", "coexist"}:
+            return {"status": "invalid_resolution"}
+        with self._lock:
+            pending, ambiguous = self._resolve_memory_id(
+                namespace, memory_id, "pending"
+            )
+            if ambiguous:
+                return {"status": "ambiguous"}
+            if pending is None:
+                return {"status": "not_found"}
+            conflict = self._db.execute(
+                "SELECT * FROM memories WHERE id = ? AND namespace = ?",
+                (pending["conflict_memory_id"], namespace),
+            ).fetchone()
+            if conflict is None or conflict["status"] != "active":
+                return {"status": "stale_conflict"}
+
+            now = _iso()
+            if selected_resolution == "keep_old":
+                self._db.execute(
+                    """
+                    UPDATE memories SET status = 'superseded', updated_at = ?,
+                        resolution_note = 'keep_old'
+                    WHERE id = ?
+                    """,
+                    (now, pending["id"]),
+                )
+                self._db.commit()
+                resolved = self._row(pending)
+                resolved.update({
+                    "status": "superseded",
+                    "updated_at": now,
+                    "resolution_note": "keep_old",
+                })
+                return {"status": "resolved", "resolution": "keep_old", "memory": resolved}
+
+            document = self._document(
+                pending["memory_key"],
+                pending["memory_value"],
+                pending["subject_name"],
+                self._row(pending)["participants"],
+            )
+            self._collection.upsert(
+                ids=[pending["id"]],
+                documents=[document],
+                embeddings=self._embed_documents([document]),
+                metadatas=[self._metadata(pending)],
+            )
+            try:
+                if selected_resolution == "keep_new":
+                    self._db.execute(
+                        "UPDATE memories SET status = 'superseded', updated_at = ? WHERE id = ?",
+                        (now, conflict["id"]),
+                    )
+                    identity_key = pending["identity_key"]
+                else:
+                    identity_key = f"{pending['identity_key']}|coexist:{pending['id']}"[:500]
+                self._db.execute(
+                    """
+                    UPDATE memories SET status = 'active', updated_at = ?,
+                        resolution_note = ?, identity_key = ?
+                    WHERE id = ?
+                    """,
+                    (now, selected_resolution, identity_key, pending["id"]),
+                )
+                self._db.commit()
+            except Exception:
+                self._collection.delete(ids=[pending["id"]])
+                self._db.rollback()
+                raise
+            if selected_resolution == "keep_new":
+                self._collection.delete(ids=[conflict["id"]])
+            resolved = self.get_memory(character_id, pending["id"])
+            return {
+                "status": "resolved",
+                "resolution": selected_resolution,
+                "memory": resolved.get("memory"),
+            }
 
     def soft_delete_all(self, character_id: str) -> int:
         namespace = make_namespace(character_id)
@@ -946,7 +1077,13 @@ class MemoryStore:
         channel_id: str = "",
     ) -> dict[str, int]:
         namespace = make_namespace(character_id)
-        counts = {"added": 0, "updated": 0, "deleted": 0, "noop": 0}
+        counts = {
+            "added": 0,
+            "updated": 0,
+            "pending": 0,
+            "deleted": 0,
+            "noop": 0,
+        }
         with self._lock:
             for operation in operations[:12]:
                 action = str(operation.get("action", "NOOP")).upper()
@@ -1048,6 +1185,193 @@ class MemoryStore:
             parts.extend(participant_ids)
         return "|".join(parts)[:500]
 
+    @staticmethod
+    def _participant_ids(row: sqlite3.Row | dict[str, Any]) -> set[str]:
+        try:
+            participants = json.loads(row["participants_json"] or "[]")
+        except (TypeError, json.JSONDecodeError, KeyError):
+            participants = []
+        return {
+            str(item.get("id", "")).strip()
+            for item in participants if isinstance(item, dict)
+            if str(item.get("id", "")).strip()
+        }
+
+    @staticmethod
+    def _claims_oppose(old_value: str, new_value: str) -> bool:
+        old_negative = bool(NEGATIVE_CLAIM_PATTERN.search(old_value))
+        new_negative = bool(NEGATIVE_CLAIM_PATTERN.search(new_value))
+        old_positive = bool(POSITIVE_CLAIM_PATTERN.search(old_value))
+        new_positive = bool(POSITIVE_CLAIM_PATTERN.search(new_value))
+        return old_negative != new_negative and (old_positive or new_positive)
+
+    def _semantic_candidates(
+        self,
+        namespace: str,
+        category: str,
+        scope_type: str,
+        scope_id: str,
+        participants: list[dict[str, str]],
+        embedding: list[float],
+    ) -> list[tuple[sqlite3.Row, float]]:
+        rows = self._db.execute(
+            """
+            SELECT * FROM memories
+            WHERE namespace = ? AND category = ? AND scope_type = ?
+              AND scope_id = ? AND status = 'active'
+            """,
+            (namespace, category, scope_type, scope_id),
+        ).fetchall()
+        if not rows:
+            return []
+        where = {
+            "$and": [
+                {"namespace": {"$eq": namespace}},
+                {"category": {"$eq": category}},
+                {"scope_type": {"$eq": scope_type}},
+                {"scope_id": {"$eq": scope_id or "__global__"}},
+            ]
+        }
+        results = self._collection.query(
+            query_embeddings=[embedding],
+            n_results=min(len(rows), 8),
+            where=where,
+            include=["distances"],
+        )
+        ids = (results.get("ids") or [[]])[0]
+        distances = (results.get("distances") or [[]])[0]
+        by_id = {row["id"]: row for row in rows}
+        new_participants = {
+            str(item.get("id", "")).strip()
+            for item in participants if str(item.get("id", "")).strip()
+        }
+        candidates: list[tuple[sqlite3.Row, float]] = []
+        for memory_id, distance in zip(ids, distances):
+            row = by_id.get(memory_id)
+            if row is None:
+                continue
+            old_participants = self._participant_ids(row)
+            if (new_participants or old_participants) and not (
+                new_participants and old_participants
+                and new_participants.intersection(old_participants)
+            ):
+                continue
+            similarity = max(0.0, min(1.0, 1.0 - float(distance)))
+            candidates.append((row, similarity))
+        return candidates
+
+    def _classify_semantic_relation(
+        self,
+        existing: sqlite3.Row,
+        *,
+        normalized_value: str,
+        value: str,
+        category: str,
+        similarity: float,
+        same_identity: bool,
+    ) -> str:
+        if existing["normalized_value"] == normalized_value:
+            return "duplicate"
+        text_ratio = SequenceMatcher(
+            None,
+            str(existing["normalized_value"]),
+            normalized_value,
+        ).ratio()
+        if similarity >= 0.93 and text_ratio >= 0.78 and not self._claims_oppose(
+            str(existing["memory_value"]), value
+        ):
+            return "duplicate"
+        if category in STABLE_CONFLICT_CATEGORIES and self._claims_oppose(
+            str(existing["memory_value"]), value
+        ) and (same_identity or similarity >= 0.72):
+            return "contradiction"
+        if same_identity:
+            return "update"
+        return "coexist"
+
+    def _store_pending_conflict(
+        self,
+        *,
+        namespace: str,
+        key: str,
+        normalized_key: str,
+        value: str,
+        normalized_value: str,
+        category: str,
+        importance: float,
+        confidence: float,
+        subject_id: str,
+        subject_name: str,
+        scope_type: str,
+        scope_id: str,
+        participants: list[dict[str, str]],
+        identity_key: str,
+        conflict_memory_id: str,
+        similarity: float,
+        request_id: str,
+        channel_id: str,
+    ) -> str:
+        source = str(request_id or "")[:100]
+        existing = self._db.execute(
+            """
+            SELECT * FROM memories
+            WHERE namespace = ? AND status = 'pending'
+              AND conflict_memory_id = ? AND normalized_value = ?
+            ORDER BY updated_at DESC LIMIT 1
+            """,
+            (namespace, conflict_memory_id, normalized_value),
+        ).fetchone()
+        now = _iso()
+        if existing is not None:
+            sources = self._row(existing).get("evidence_sources", [])
+            if source and source not in sources:
+                sources.append(source)
+            self._db.execute(
+                """
+                UPDATE memories SET updated_at = ?, evidence_count = ?,
+                    evidence_sources_json = ?, importance = MAX(importance, ?),
+                    confidence = MAX(confidence, ?),
+                    conflict_similarity = MAX(conflict_similarity, ?)
+                WHERE id = ?
+                """,
+                (
+                    now,
+                    max(1, len(sources)),
+                    json.dumps(sources, ensure_ascii=False),
+                    importance,
+                    confidence,
+                    similarity,
+                    existing["id"],
+                ),
+            )
+            self._db.commit()
+            return "noop"
+        memory_id = str(uuid.uuid4())
+        sources = [source] if source else []
+        self._db.execute(
+            """
+            INSERT INTO memories (
+                id, namespace, memory_key, normalized_key, memory_value,
+                normalized_value, category, importance, confidence, status,
+                created_at, updated_at, supersedes_id, source_request_id,
+                source_channel_id, subject_id, subject_name, scope_type, scope_id,
+                participants_json, identity_key, conflict_memory_id, conflict_type,
+                conflict_similarity, evidence_count, evidence_sources_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                'contradiction', ?, ?, ?)
+            """,
+            (
+                memory_id, namespace, key, normalized_key, value, normalized_value,
+                category, importance, confidence, now, now, conflict_memory_id,
+                source, channel_id[:100], subject_id, subject_name, scope_type,
+                scope_id, json.dumps(participants, ensure_ascii=False), identity_key,
+                conflict_memory_id, similarity, max(1, len(sources)),
+                json.dumps(sources, ensure_ascii=False),
+            ),
+        )
+        self._db.commit()
+        return "pending"
+
     def _upsert(
         self,
         namespace: str,
@@ -1108,10 +1432,96 @@ class MemoryStore:
             self._db.commit()
             return "noop"
 
-        supersedes_id = existing["id"] if existing is not None else None
-        memory_id = str(uuid.uuid4())
         document = self._document(key, value, subject_name, participants)
         embedding = self._embed_documents([document])[0]
+        semantic_candidates = self._semantic_candidates(
+            namespace,
+            category,
+            scope_type,
+            scope_id,
+            participants,
+            embedding,
+        )
+        similarity_by_id = {
+            row["id"]: similarity for row, similarity in semantic_candidates
+        }
+        if existing is not None:
+            relation = self._classify_semantic_relation(
+                existing,
+                normalized_value=normalized_value,
+                value=value,
+                category=category,
+                similarity=similarity_by_id.get(existing["id"], 1.0),
+                same_identity=True,
+            )
+            if relation == "contradiction":
+                return self._store_pending_conflict(
+                    namespace=namespace,
+                    key=key,
+                    normalized_key=normalized_key,
+                    value=value,
+                    normalized_value=normalized_value,
+                    category=category,
+                    importance=importance,
+                    confidence=confidence,
+                    subject_id=subject_id,
+                    subject_name=subject_name,
+                    scope_type=scope_type,
+                    scope_id=scope_id,
+                    participants=participants,
+                    identity_key=identity_key,
+                    conflict_memory_id=existing["id"],
+                    similarity=similarity_by_id.get(existing["id"], 1.0),
+                    request_id=request_id,
+                    channel_id=channel_id,
+                )
+        else:
+            for candidate, similarity in semantic_candidates:
+                relation = self._classify_semantic_relation(
+                    candidate,
+                    normalized_value=normalized_value,
+                    value=value,
+                    category=category,
+                    similarity=similarity,
+                    same_identity=False,
+                )
+                if relation == "duplicate":
+                    self._db.execute(
+                        """
+                        UPDATE memories SET updated_at = ?,
+                            importance = MAX(importance, ?),
+                            confidence = MAX(confidence, ?),
+                            evidence_count = evidence_count + 1
+                        WHERE id = ?
+                        """,
+                        (_iso(), importance, confidence, candidate["id"]),
+                    )
+                    self._db.commit()
+                    return "noop"
+                if relation == "contradiction":
+                    return self._store_pending_conflict(
+                        namespace=namespace,
+                        key=key,
+                        normalized_key=normalized_key,
+                        value=value,
+                        normalized_value=normalized_value,
+                        category=category,
+                        importance=importance,
+                        confidence=confidence,
+                        subject_id=subject_id,
+                        subject_name=subject_name,
+                        scope_type=scope_type,
+                        scope_id=scope_id,
+                        participants=participants,
+                        identity_key=identity_key,
+                        conflict_memory_id=candidate["id"],
+                        similarity=similarity,
+                        request_id=request_id,
+                        channel_id=channel_id,
+                    )
+
+        supersedes_id = existing["id"] if existing is not None else None
+        memory_id = str(uuid.uuid4())
         self._collection.add(
             ids=[memory_id],
             documents=[document],

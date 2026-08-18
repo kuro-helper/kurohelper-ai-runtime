@@ -156,8 +156,11 @@ function createMemoryClient(options = {}) {
   }
 
   async function listMemories({ status = "active", limit = 20, offset = 0 } = {}) {
+    const selectedStatus = ["active", "pending", "deleted"].includes(status)
+      ? status
+      : "active";
     return manage("list", {
-      status: status === "deleted" ? "deleted" : "active",
+      status: selectedStatus,
       limit: Math.max(1, Math.min(Number(limit) || 20, 50)),
       offset: Math.max(0, Math.min(Number(offset) || 0, 1_000_000)),
     });
@@ -173,6 +176,13 @@ function createMemoryClient(options = {}) {
 
   async function restoreMemory(memoryId) {
     return manage("restore", { memory_id: String(memoryId || "") });
+  }
+
+  async function resolveMemory(memoryId, resolution) {
+    return manage("resolve", {
+      memory_id: String(memoryId || ""),
+      resolution: String(resolution || ""),
+    });
   }
 
   async function clearMemories() {
@@ -209,6 +219,7 @@ function createMemoryClient(options = {}) {
     getMemory,
     forgetMemory,
     restoreMemory,
+    resolveMemory,
     clearMemories,
     listBackups,
     createBackup,
@@ -228,6 +239,7 @@ module.exports = {
   getMemory: defaultClient.getMemory,
   forgetMemory: defaultClient.forgetMemory,
   restoreMemory: defaultClient.restoreMemory,
+  resolveMemory: defaultClient.resolveMemory,
   clearMemories: defaultClient.clearMemories,
   listBackups: defaultClient.listBackups,
   createBackup: defaultClient.createBackup,

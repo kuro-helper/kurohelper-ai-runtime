@@ -100,7 +100,7 @@ class TurnRequest(BaseModel):
 
 class MemoryListRequest(BaseModel):
     character_id: str = Field(min_length=1, max_length=80)
-    status: str = Field(default="active", pattern="^(active|deleted)$")
+    status: str = Field(default="active", pattern="^(active|pending|deleted)$")
     limit: int = Field(default=20, ge=1, le=50)
     offset: int = Field(default=0, ge=0, le=1_000_000)
 
@@ -108,6 +108,10 @@ class MemoryListRequest(BaseModel):
 class MemoryIdRequest(BaseModel):
     character_id: str = Field(min_length=1, max_length=80)
     memory_id: str = Field(min_length=6, max_length=100)
+
+
+class MemoryResolveRequest(MemoryIdRequest):
+    resolution: str = Field(pattern="^(keep_new|keep_old|coexist)$")
 
 
 class MemoryClearRequest(BaseModel):
@@ -369,6 +373,12 @@ def _management_memory(memory: dict[str, Any]) -> dict[str, Any]:
         "last_accessed_at": memory.get("last_accessed_at", ""),
         "access_count": memory.get("access_count", 0),
         "supersedes_id": memory.get("supersedes_id", ""),
+        "conflict_memory_id": memory.get("conflict_memory_id", ""),
+        "conflict_type": memory.get("conflict_type", ""),
+        "conflict_similarity": memory.get("conflict_similarity", 0),
+        "evidence_count": memory.get("evidence_count", 1),
+        "evidence_sources": memory.get("evidence_sources", []),
+        "resolution_note": memory.get("resolution_note", ""),
         "source_request_id": memory.get("source_request_id", ""),
         "source_channel_id": memory.get("source_channel_id", ""),
     }
@@ -449,6 +459,19 @@ async def restore_managed_memory(request: MemoryIdRequest) -> dict[str, Any]:
         _store().restore,
         request.character_id,
         request.memory_id,
+    )
+    if result.get("memory"):
+        result["memory"] = _management_memory(result["memory"])
+    return result
+
+
+@app.post("/v1/manage/resolve")
+async def resolve_pending_memory(request: MemoryResolveRequest) -> dict[str, Any]:
+    result = await asyncio.to_thread(
+        _store().resolve_pending,
+        request.character_id,
+        request.memory_id,
+        request.resolution,
     )
     if result.get("memory"):
         result["memory"] = _management_memory(result["memory"])

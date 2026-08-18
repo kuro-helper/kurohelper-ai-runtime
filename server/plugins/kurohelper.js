@@ -8,6 +8,7 @@ const {
   getMemory,
   forgetMemory,
   restoreMemory,
+  resolveMemory,
   clearMemories,
   listBackups,
   createBackup,
@@ -81,12 +82,59 @@ function createKuroHelperPlugin(handlers, pluginConfig = {}) {
     }).filter((image) => image.url);
   }
 
-  function requestFingerprint(channelId, userId, text, images = []) {
+  function cleanInline(value, limit) {
+    return String(value || "")
+      .replace(/[\u0000-\u001f\u007f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, limit);
+  }
+
+  function normalizeReplyReference(reply) {
+    if (!reply || typeof reply !== "object") return null;
+    const assistant = reply.assistant === true;
+    const normalized = {
+      messageId: cleanInline(reply.messageId, 100),
+      userId: cleanInline(reply.userId, 100),
+      displayName: cleanInline(reply.displayName || (assistant ? "Kuro" : "Discord 使用者"), 100),
+      content: cleanInline(reply.content, 300),
+      assistant,
+      imageCount: Math.max(0, Math.min(Number(reply.imageCount) || 0, 10)),
+      unavailable: reply.unavailable === true,
+    };
+    if (!normalized.unavailable && !normalized.messageId
+      && !normalized.content && normalized.imageCount === 0) return null;
+    return normalized;
+  }
+
+  function normalizeRecentMessages(messages) {
+    if (!Array.isArray(messages)) return [];
+    return messages.slice(0, 50).map((message) => ({
+      id: cleanInline(message?.id, 100),
+      userId: cleanInline(message?.userId, 100),
+      displayName: cleanInline(message?.displayName, 100),
+      content: String(message?.content || "").trim().slice(0, 4000),
+      assistant: message?.assistant === true,
+      createdAt: String(message?.createdAt || "").slice(0, 100),
+      replyTo: normalizeReplyReference(message?.replyTo),
+    })).filter((message) => message.content && message.displayName);
+  }
+
+  function requestFingerprint(
+    channelId,
+    userId,
+    text,
+    images = [],
+    replyTo = null,
+    recentMessages = [],
+  ) {
     return JSON.stringify([
       String(channelId),
       String(userId),
       String(text),
       images.map((image) => [image.id, image.url]),
+      replyTo,
+      recentMessages.map((message) => [message.id, message.replyTo]),
     ]);
   }
 
@@ -154,7 +202,9 @@ function createKuroHelperPlugin(handlers, pluginConfig = {}) {
     switch (request.action) {
       case "list":
         result = await listMemories({
-          status: request.status === "deleted" ? "deleted" : "active",
+          status: ["active", "pending", "deleted"].includes(request.status)
+            ? request.status
+            : "active",
           limit: Math.max(1, Math.min(Number(request.limit) || 20, 50)),
           offset: Math.max(0, Math.min(Number(request.offset) || 0, 1_000_000)),
         });
@@ -167,6 +217,12 @@ function createKuroHelperPlugin(handlers, pluginConfig = {}) {
         break;
       case "restore":
         result = await restoreMemory(String(request.memoryId || ""));
+        break;
+      case "resolve":
+        result = await resolveMemory(
+          String(request.memoryId || ""),
+          String(request.resolution || ""),
+        );
         break;
       case "clear":
         result = await clearMemories();
@@ -257,6 +313,8 @@ function createKuroHelperPlugin(handlers, pluginConfig = {}) {
     const userId = String(payload.userId || "").trim();
     const text = String(payload.text || "").trim();
     const images = normalizeImages(payload.images);
+    const replyTo = normalizeReplyReference(payload.replyTo);
+    const recentMessages = normalizeRecentMessages(payload.recentMessages);
     if (Array.isArray(payload.images) && payload.images.length > 0) {
       handlers.log(
         "log",
@@ -267,7 +325,14 @@ function createKuroHelperPlugin(handlers, pluginConfig = {}) {
       fail(socket, message.requestId, "invalid_request", "channelId, userId and text are required.");
       return;
     }
-    const fingerprint = requestFingerprint(channelId, userId, text, images);
+    const fingerprint = requestFingerprint(
+      channelId,
+      userId,
+      text,
+      images,
+      replyTo,
+      recentMessages,
+    );
     const completed = completedByRequest.get(message.requestId);
     if (completed) {
       if (completed.fingerprint !== fingerprint) {
@@ -309,9 +374,8 @@ function createKuroHelperPlugin(handlers, pluginConfig = {}) {
             ? payload.contextParticipants.slice(0, 25)
             : [],
           recentChannelContext: String(payload.recentChannelContext || ""),
-          recentMessages: Array.isArray(payload.recentMessages)
-            ? payload.recentMessages.slice(0, 50)
-            : [],
+          recentMessages,
+          replyTo,
           retrievalText: String(payload.retrievalText || ""),
           images,
         },

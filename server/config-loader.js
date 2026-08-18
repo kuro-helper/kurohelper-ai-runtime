@@ -22,10 +22,9 @@ if (!fs.existsSync(configPath)) {
   process.exit(1);
 }
 
-const rawConfig = require("./config");
-
 let config;
 try {
+  const rawConfig = require("./config");
   const result = createConfig(rawConfig);
   config = result.config;
   for (const warning of result.warnings) console.warn(warning);

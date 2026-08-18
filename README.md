@@ -16,8 +16,10 @@ Copy-Item server/config.example.js server/config.js
 Copy-Item ../kurohelper/.env.example ../kurohelper/.env
 ```
 
-Set the OpenRouter configuration in `.env`, then generate and synchronize the
-shared runtime secret:
+All user-facing AI Runtime settings are centralized in `.env`; `server/config.js`
+only loads and validates those values. Set the OpenRouter configuration and
+character-card paths in `.env`, then generate and synchronize the shared
+runtime secret:
 
 ```powershell
 npm run configure-runtime-secret

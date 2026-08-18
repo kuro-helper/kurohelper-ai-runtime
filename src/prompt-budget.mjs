@@ -1,3 +1,8 @@
+import {
+  formatDiscordReplyLabel,
+  normalizeDiscordReplyReference,
+} from './discord-reply.mjs';
+
 export const DEFAULT_DYNAMIC_CONTEXT_TOKEN_BUDGET = 1200;
 export const DEFAULT_MEMORY_SOFT_TOKEN_BUDGET = 400;
 
@@ -319,6 +324,10 @@ export function buildBudgetedDynamicContexts({
 function structuredMessageTokenCost(message) {
   return estimatePromptTokens(message?.content)
     + estimatePromptTokens(message?.displayName)
+    + estimatePromptTokens(formatDiscordReplyLabel(message?.replyTo))
+    + (message?.createdAt
+      ? estimatePromptTokens('[2000-00-00 00:00]')
+      : 0)
     + 4;
 }
 
@@ -394,6 +403,7 @@ export function buildBudgetedDynamicHistory({
         assistant,
         createdAt: message?.createdAt,
         content,
+        replyTo: normalizeDiscordReplyReference(message?.replyTo),
       };
     })
     .filter((message) => message.content && message.displayName);
@@ -436,7 +446,12 @@ export function buildBudgetedDynamicHistory({
     let cost = structuredMessageTokenCost(message);
     if (conversationTokens + cost > conversationBudget) {
       if (selected.length === 0 && conversationTokens < conversationBudget) {
-        const fixedCost = estimatePromptTokens(message.displayName) + 4;
+        const fixedCost = estimatePromptTokens(message.displayName)
+          + estimatePromptTokens(formatDiscordReplyLabel(message.replyTo))
+          + (message.createdAt
+            ? estimatePromptTokens('[2000-00-00 00:00]')
+            : 0)
+          + 4;
         message.content = truncatePromptToTokenBudget(
           message.content,
           Math.max(0, conversationBudget - conversationTokens - fixedCost),

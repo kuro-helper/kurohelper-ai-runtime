@@ -37,6 +37,66 @@ test('structured history keeps roles and binds observations to source messages',
   assert.ok(result.tokenUsage.total <= 300);
 });
 
+test('structured history token usage includes visible timestamps', () => {
+  const withoutTimestamp = buildBudgetedDynamicHistory({
+    recentMessages: [
+      { id: '101', displayName: 'Alice', content: 'hello', assistant: false },
+    ],
+    dynamicContextTokenBudget: 100,
+    memorySoftTokenBudget: 0,
+  });
+  const withTimestamp = buildBudgetedDynamicHistory({
+    recentMessages: [
+      {
+        id: '101',
+        displayName: 'Alice',
+        content: 'hello',
+        assistant: false,
+        createdAt: '2026-08-05T15:03:14.431Z',
+      },
+    ],
+    dynamicContextTokenBudget: 100,
+    memorySoftTokenBudget: 0,
+  });
+
+  assert.ok(
+    withTimestamp.tokenUsage.conversation
+      > withoutTimestamp.tokenUsage.conversation,
+  );
+  assert.ok(withTimestamp.tokenUsage.total <= 100);
+});
+
+test('structured history preserves reply metadata and accounts for its prompt cost', () => {
+  const base = {
+    recentMessages: [{
+      id: '1', displayName: 'Alice', content: 'new question', assistant: false,
+    }],
+    dynamicContextTokenBudget: 100,
+  };
+  const withoutReply = buildBudgetedDynamicHistory(base);
+  const withReply = buildBudgetedDynamicHistory({
+    ...base,
+    recentMessages: [{
+      ...base.recentMessages[0],
+      replyTo: {
+        messageId: '0', displayName: 'Kuro', content: 'older answer', assistant: true,
+      },
+    }],
+  });
+
+  assert.deepEqual(withReply.recentMessages[0].replyTo, {
+    messageId: '0',
+    userId: '',
+    displayName: 'Kuro',
+    content: 'older answer',
+    assistant: true,
+    imageCount: 0,
+    unavailable: false,
+  });
+  assert.ok(withReply.tokenUsage.conversation > withoutReply.tokenUsage.conversation);
+  assert.ok(withReply.tokenUsage.total <= 100);
+});
+
 test('structured history appends current image context to current user turn', () => {
   const result = buildBudgetedDynamicHistory({
     recentMessages: [],

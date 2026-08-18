@@ -11,9 +11,15 @@ test('buildRequestContextPrompt formats Taipei time and separates the user from 
   assert.match(prompt, /顯示名稱是「TestUserA」/);
   assert.match(prompt, /TestUserA.*奏大雅是兩個不同的人/);
   assert.doesNotMatch(prompt, /禁止|不得描寫|不得描述/);
-  assert.match(prompt, /輸出格式：只輸出小黑實際說出的台詞。/);
+  assert.match(
+    prompt,
+    /輸出格式：只輸出小黑實際說出的台詞，不使用括號、星號或第三人稱旁白格式。/,
+  );
   assert.doesNotMatch(prompt, /害羞、猶豫與停頓只用/);
-  assert.match(prompt, /輸出格式：只輸出小黑實際說出的台詞。$/);
+  assert.match(
+    prompt,
+    /輸出格式：只輸出小黑實際說出的台詞，不使用括號、星號或第三人稱旁白格式。$/,
+  );
 });
 
 test('buildRequestContextPrompt removes control characters from display names', () => {

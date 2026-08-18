@@ -365,6 +365,7 @@ const pluginLoader = createPluginLoader({
       recentMessages: Array.isArray(metadata.recentMessages)
         ? metadata.recentMessages
         : [],
+      replyTo: metadata.replyTo || null,
       visionContext: vision.context || '',
       visionObservations: Array.isArray(vision.structured) ? vision.structured : [],
       memoryRecentContext: metadata.retrievalText || '',
