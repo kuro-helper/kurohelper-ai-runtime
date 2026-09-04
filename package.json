@@ -14,27 +14,9 @@
     "llm",
     "assistant"
   ],
-  "files": [
-    "index.js",
-    "manifest.json",
-    "settings.html",
-    "style.css",
-    "server/*.js",
-    "server/package.json",
-    "server/config.example.js",
-    "server/start-runtime.bat",
-    "!server/config.js",
-    "scripts/release-checklist.js"
-  ],
   "scripts": {
-    "version": "node -e \"if(require('child_process').execSync('git branch --show-current').toString().trim()!=='main'){process.stderr.write('Version bumps must be done on main.\\n');process.exit(1)}\" && cd server && npm install && cd .. && version-everything manifest.json server/package.json && git add manifest.json server/package.json package-lock.json server/package-lock.json",
-    "bump": "npm version patch && git push origin HEAD --tags",
-    "bump-minor": "npm version minor && git push origin HEAD --tags",
-    "bump-major": "npm version major && git push origin HEAD --tags",
     "verify-release": "npm run release-checklist",
-    "test-package": "npm pack --dry-run",
     "install-server": "cd server && npm install",
-    "test-release": "npm run verify-release",
     "start": "cd server && node server.js",
     "test-character-seed": "node --test deploy/character-seed/seed.test.mjs",
     "configure-runtime-secret": "node scripts/configure-runtime-secret.mjs",
@@ -52,8 +34,5 @@
   "bugs": {
     "url": "https://github.com/kuro-helper/kurohelper-ai-runtime/issues"
   },
-  "homepage": "https://github.com/kuro-helper/kurohelper-ai-runtime#readme",
-  "devDependencies": {
-    "version-everything": "^0.11.4"
-  }
+  "homepage": "https://github.com/kuro-helper/kurohelper-ai-runtime#readme"
 }

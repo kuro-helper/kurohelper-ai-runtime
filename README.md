@@ -2,15 +2,28 @@
 
 ## Build
 
-Requires Docker Desktop with Docker Compose and Node.js 22 or later. Keep
-`kurohelper-ai-runtime` and `kurohelper` in the same parent directory when using
-the runtime-secret configuration script.
+Requires Docker Desktop with Docker Compose and Node.js 22 or later. Use the
+following directory layout so the Compose character-card paths and shared
+runtime-secret script work without overrides:
+
+```text
+workspace/
+├── KuroHelper/
+│   ├── kurohelper-ai-runtime/
+│   └── kurohelper/
+└── kuro/
+    └── kuro-character/
+```
+
+From `workspace`, clone the required repositories:
 
 ```powershell
-git clone https://github.com/kuro-helper/kurohelper-ai-runtime.git
-git clone https://github.com/kuro-helper/kurohelper.git
+New-Item -ItemType Directory -Force ./KuroHelper, ./kuro
+git clone https://github.com/kuro-helper/kurohelper-ai-runtime.git ./KuroHelper/kurohelper-ai-runtime
+git clone https://github.com/kuro-helper/kurohelper.git ./KuroHelper/kurohelper
+git clone https://github.com/tommy-125/kuro-character.git ./kuro/kuro-character
 
-Set-Location ./kurohelper-ai-runtime
+Set-Location ./KuroHelper/kurohelper-ai-runtime
 Copy-Item .env.example .env
 Copy-Item server/config.example.js server/config.js
 Copy-Item ../kurohelper/.env.example ../kurohelper/.env
